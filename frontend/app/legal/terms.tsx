@@ -71,8 +71,8 @@ export default function TermsOfService() {
           4.3. Użytkownik jest odpowiedzialny za bezpieczeństwo swojego hasła i Konta.
         </Text>
         <Text style={styles.paragraph}>
-          4.4. Użytkownik może w każdej chwili usunąć swoje Konto, kontaktując się z nami 
-          pod adresem hello@cashflo.cash.
+          4.4. Użytkownik może w każdej chwili usunąć swoje Konto w aplikacji (Więcej → Usuń konto)
+          albo kontaktując się z nami pod adresem hello@cashflo.cash.
         </Text>
 
         <Text style={styles.sectionTitle}>5. Usługa Premium</Text>

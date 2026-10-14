@@ -180,7 +180,12 @@ export default function MoreScreen() {
         <Ionicons name="log-out-outline" size={24} color={colors.error} />
         <Text style={styles.logoutText}>Wyloguj się</Text>
       </TouchableOpacity>
-      
+
+      {/* Delete account (required by the App Store and GDPR) */}
+      <TouchableOpacity style={styles.deleteAccountButton} onPress={() => router.push('/account/delete')}>
+        <Text style={styles.deleteAccountText}>Usuń konto</Text>
+      </TouchableOpacity>
+
       {/* Bottom padding */}
       <View style={{ height: 30 }} />
     </ScrollView>
@@ -382,5 +387,15 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontWeight: '600',
     color: colors.error,
     marginLeft: 10,
+  },
+  deleteAccountButton: {
+    alignItems: 'center',
+    padding: 14,
+    marginTop: 12,
+  },
+  deleteAccountText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    textDecorationLine: 'underline',
   },
 });

@@ -9,6 +9,7 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: (password: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   isAuthenticated: boolean;
 }
@@ -65,6 +66,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     setUser(null);
   };
 
+  const deleteAccount = async (password: string) => {
+    try {
+      await api.post('/auth/delete-account', { password });
+    } catch (error: any) {
+      if (error.response?.status === 403) {
+        throw new Error('Nieprawidłowe hasło.');
+      }
+      throw new Error('Nie udało się usunąć konta. Sprawdź połączenie z internetem i spróbuj ponownie.');
+    }
+    await AsyncStorage.removeItem('authToken');
+    setUser(null);
+  };
+
   const refreshUser = async () => {
     try {
       const token = await AsyncStorage.getItem('authToken');
@@ -85,6 +99,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         login,
         register,
         logout,
+        deleteAccount,
         refreshUser,
         isAuthenticated: !!user,
       }}

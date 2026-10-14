@@ -12,7 +12,16 @@ from datetime import datetime, timedelta
 from passlib.context import CryptContext
 import jwt
 from bson import ObjectId
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+
+# Stripe Checkout helpers come from Emergent's own package, which is only
+# installable on the Emergent platform. Outside it the server still starts and
+# the payment endpoints answer 503 until payments are rewritten.
+try:
+    from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
+    STRIPE_LIB_AVAILABLE = True
+except ImportError:
+    StripeCheckout = CheckoutSessionResponse = CheckoutStatusResponse = CheckoutSessionRequest = None
+    STRIPE_LIB_AVAILABLE = False
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -219,14 +228,38 @@ def verify_token(token: str):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+# Case-insensitive match for e-mail lookups (also finds older accounts
+# that were stored with capital letters).
+EMAIL_COLLATION = {"locale": "en", "strength": 2}
+
+
+def normalize_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def to_object_id(value: str, not_found: str = "Not found") -> ObjectId:
+    """Turn a path id into an ObjectId, answering 404 instead of 500 for malformed ids."""
+    if not value or not ObjectId.is_valid(value):
+        raise HTTPException(status_code=404, detail=not_found)
+    return ObjectId(value)
+
+
+def stripe_webhook_url(request: Request) -> str:
+    return str(request.base_url).rstrip('/') + "/api/webhook/stripe"
+
+
+def stripe_ready() -> bool:
+    return bool(STRIPE_API_KEY) and STRIPE_LIB_AVAILABLE
+
+
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
     payload = verify_token(token)
     user_id = payload.get("user_id")
-    if not user_id:
+    if not user_id or not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=401, detail="Invalid token")
-    
-    user = await db.users.find_one({"_id": ObjectId(user_id)})
+
+    user = await db.users.find_one({"_id": to_object_id(user_id, "User not found")})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
@@ -250,31 +283,35 @@ DEFAULT_CATEGORIES = [
 ]
 
 
-ADMIN_EMAILS = ["tyrex7788@gmail.com"]
+# Admin rights come only from the is_admin flag stored in the database.
+# Grant them with: python scripts/make_admin.py <email>
+# (Registration does not verify e-mail ownership, so an e-mail address alone
+# must never grant admin access.)
 
 
 # ============= AUTH ENDPOINTS =============
 
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
+    email = normalize_email(user_data.email)
+
     # Check if user exists
-    existing_user = await db.users.find_one({"email": user_data.email})
+    existing_user = await db.users.find_one({"email": email}, collation=EMAIL_COLLATION)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
-    
+
     # Hash password
     hashed_password = pwd_context.hash(user_data.password)
-    
+
     now = datetime.utcnow()
-    is_admin = user_data.email.lower() in [e.lower() for e in ADMIN_EMAILS]
-    
+
     # Create user
     user_dict = {
-        "email": user_data.email,
+        "email": email,
         "password_hash": hashed_password,
         "name": user_data.name,
-        "is_pro": is_admin,  # auto-pro for admin
-        "is_admin": is_admin,
+        "is_pro": False,
+        "is_admin": False,
         "created_at": now,
         "last_login": now,
         "login_count": 1,
@@ -300,10 +337,10 @@ async def register(user_data: UserCreate):
     
     user_response = UserResponse(
         id=user_id,
-        email=user_data.email,
+        email=email,
         name=user_data.name,
-        is_pro=is_admin,
-        is_admin=is_admin,
+        is_pro=False,
+        is_admin=False,
         created_at=user_dict["created_at"],
         last_login=now,
         login_count=1,
@@ -315,22 +352,20 @@ async def register(user_data: UserCreate):
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(user_data: UserLogin):
     # Find user
-    user = await db.users.find_one({"email": user_data.email})
+    user = await db.users.find_one({"email": normalize_email(user_data.email)}, collation=EMAIL_COLLATION)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+
     # Verify password
     if not pwd_context.verify(user_data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    
+
     user_id = str(user["_id"])
     now = datetime.utcnow()
-    
-    # Auto-promote admin emails if not yet admin
-    is_admin = user.get("is_admin", False) or user["email"].lower() in [e.lower() for e in ADMIN_EMAILS]
+
+    is_admin = user.get("is_admin", False)
     update_fields = {
         "last_login": now,
-        "is_admin": is_admin,
     }
     inc_fields = {"login_count": 1}
     
@@ -373,6 +408,42 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         last_login=current_user.get("last_login"),
         login_count=current_user.get("login_count", 0),
     )
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str
+
+
+@api_router.post("/auth/delete-account")
+async def delete_own_account(
+    body: DeleteAccountRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Permanently delete the signed-in user's account and all their data.
+
+    Required by the App Store for apps with sign-up, and by GDPR (right to erasure).
+    The password is asked again so a borrowed, unlocked phone can't wipe the account.
+    """
+    if not pwd_context.verify(body.password, current_user["password_hash"]):
+        raise HTTPException(status_code=403, detail="Invalid password")
+
+    user_id = str(current_user["_id"])
+    await db.transactions.delete_many({"user_id": user_id})
+    await db.goals.delete_many({"user_id": user_id})
+    await db.budgets.delete_many({"user_id": user_id})
+    await db.categories.delete_many({"user_id": user_id})
+    # Keep payment records for accounting, but strip everything that identifies the person
+    await db.payment_transactions.update_many(
+        {"user_id": user_id},
+        {
+            "$set": {"user_id": None, "account_deleted_at": datetime.utcnow()},
+            "$unset": {"metadata.user_email": ""},
+        },
+    )
+    await db.users.delete_one({"_id": current_user["_id"]})
+
+    logger.info(f"User {user_id} deleted their account")
+    return {"status": "deleted"}
 
 
 # ============= TRANSACTION ENDPOINTS =============
@@ -529,7 +600,7 @@ async def get_transaction(
     current_user: dict = Depends(get_current_user)
 ):
     transaction = await db.transactions.find_one({
-        "_id": ObjectId(transaction_id),
+        "_id": to_object_id(transaction_id, "Transaction not found"),
         "user_id": str(current_user["_id"])
     })
     
@@ -564,14 +635,14 @@ async def update_transaction(
         raise HTTPException(status_code=400, detail="No data to update")
     
     result = await db.transactions.update_one(
-        {"_id": ObjectId(transaction_id), "user_id": str(current_user["_id"])},
+        {"_id": to_object_id(transaction_id, "Transaction not found"), "user_id": str(current_user["_id"])},
         {"$set": update_data}
     )
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Transaction not found")
     
-    updated_transaction = await db.transactions.find_one({"_id": ObjectId(transaction_id)})
+    updated_transaction = await db.transactions.find_one({"_id": to_object_id(transaction_id, "Transaction not found")})
     
     return TransactionResponse(
         id=str(updated_transaction["_id"]),
@@ -595,7 +666,7 @@ async def delete_transaction(
     current_user: dict = Depends(get_current_user)
 ):
     result = await db.transactions.delete_one({
-        "_id": ObjectId(transaction_id),
+        "_id": to_object_id(transaction_id, "Transaction not found"),
         "user_id": str(current_user["_id"])
     })
     
@@ -725,11 +796,13 @@ async def create_category(
     category: CategoryCreate,
     current_user: dict = Depends(get_current_user)
 ):
+    category_type = category.type if category.type in ("expense", "income") else "expense"
     category_dict = {
         "user_id": str(current_user["_id"]),
         "name": category.name,
         "icon": category.icon,
         "color": category.color,
+        "type": category_type,
         "is_default": False
     }
     
@@ -832,14 +905,14 @@ async def update_goal(
         raise HTTPException(status_code=400, detail="No data to update")
     
     result = await db.goals.update_one(
-        {"_id": ObjectId(goal_id), "user_id": str(current_user["_id"])},
+        {"_id": to_object_id(goal_id, "Goal not found"), "user_id": str(current_user["_id"])},
         {"$set": update_data}
     )
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Goal not found")
     
-    updated_goal = await db.goals.find_one({"_id": ObjectId(goal_id)})
+    updated_goal = await db.goals.find_one({"_id": to_object_id(goal_id, "Goal not found")})
     
     progress = (updated_goal["current_amount"] / updated_goal["target_amount"] * 100) if updated_goal["target_amount"] > 0 else 0
     
@@ -861,7 +934,7 @@ async def delete_goal(
     current_user: dict = Depends(get_current_user)
 ):
     result = await db.goals.delete_one({
-        "_id": ObjectId(goal_id),
+        "_id": to_object_id(goal_id, "Goal not found"),
         "user_id": str(current_user["_id"])
     })
     
@@ -958,8 +1031,8 @@ async def create_checkout_session(
     current_user: dict = Depends(get_current_user)
 ):
     """Create Stripe checkout session for Pro subscription"""
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
+    if not stripe_ready():
+        raise HTTPException(status_code=503, detail="Stripe not configured")
     
     user_id = str(current_user["_id"])
     user_email = current_user["email"]
@@ -974,10 +1047,8 @@ async def create_checkout_session(
     cancel_url = f"{origin_url}/pro/upgrade"
     
     # Initialize Stripe
-    host_url = str(request.base_url).rstrip('/')
-    webhook_url = f"{host_url}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
-    
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=stripe_webhook_url(request))
+
     # Create checkout session with PLN currency
     checkout_request = CheckoutSessionRequest(
         amount=PRO_PRICE_PLN,
@@ -1027,8 +1098,8 @@ async def get_payment_status(
     current_user: dict = Depends(get_current_user)
 ):
     """Check payment status and activate Pro if paid"""
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
+    if not stripe_ready():
+        raise HTTPException(status_code=503, detail="Stripe not configured")
     
     user_id = str(current_user["_id"])
     
@@ -1050,9 +1121,7 @@ async def get_payment_status(
         )
     
     # Initialize Stripe and check status
-    host_url = str(request.base_url).rstrip('/')
-    webhook_url = f"{host_url}api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=stripe_webhook_url(request))
     
     try:
         checkout_status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
@@ -1080,7 +1149,7 @@ async def get_payment_status(
             if not existing_activation:
                 # Activate Pro for user
                 await db.users.update_one(
-                    {"_id": ObjectId(user_id)},
+                    {"_id": to_object_id(user_id, "User not found")},
                     {"$set": {"is_pro": True, "pro_activated_at": datetime.utcnow()}}
                 )
                 
@@ -1108,35 +1177,53 @@ async def get_payment_status(
 
 @api_router.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks"""
-    if not STRIPE_API_KEY:
-        raise HTTPException(status_code=500, detail="Stripe not configured")
-    
+    """Handle Stripe webhooks.
+
+    Every event must carry a valid Stripe signature. Without a configured
+    webhook secret the endpoint refuses all events, so nobody can fake a
+    "paid" event to unlock Pro.
+    """
+    if not stripe_ready() or not STRIPE_WEBHOOK_SECRET:
+        logger.error("Stripe webhook called, but STRIPE_API_KEY / STRIPE_WEBHOOK_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Stripe webhook not configured")
+
     body = await request.body()
     signature = request.headers.get("Stripe-Signature")
-    
-    host_url = str(request.base_url).rstrip('/')
-    webhook_url = f"{host_url}api/webhook/stripe"
+    if not signature:
+        raise HTTPException(status_code=400, detail="Missing Stripe signature")
+
     stripe_checkout = StripeCheckout(
-        api_key=STRIPE_API_KEY, 
-        webhook_url=webhook_url,
-        webhook_secret=STRIPE_WEBHOOK_SECRET if STRIPE_WEBHOOK_SECRET else None
+        api_key=STRIPE_API_KEY,
+        webhook_url=stripe_webhook_url(request),
+        webhook_secret=STRIPE_WEBHOOK_SECRET,
     )
-    
+
     try:
         webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        
+    except Exception as e:
+        logger.error(f"Stripe webhook rejected: {str(e)}")
+        raise HTTPException(status_code=400, detail="Invalid webhook")
+
+    try:
         logger.info(f"Webhook received: {webhook_response.event_type}")
-        
+
         # Handle checkout.session.completed event
         if webhook_response.event_type == "checkout.session.completed":
             session_id = webhook_response.session_id
             metadata = webhook_response.metadata
-            
+
             if metadata and metadata.get("product") == "cashflo_pro":
                 user_id = metadata.get("user_id")
-                
-                if user_id:
+
+                # Only activate for a checkout session this server created for this user
+                known_payment = await db.payment_transactions.find_one({
+                    "session_id": session_id,
+                    "user_id": user_id,
+                }) if user_id else None
+                if user_id and not known_payment:
+                    logger.warning(f"Webhook for unknown session {session_id}; ignored")
+
+                if known_payment and ObjectId.is_valid(user_id):
                     # Update payment record
                     await db.payment_transactions.update_one(
                         {"session_id": session_id},
@@ -1158,29 +1245,27 @@ async def stripe_webhook(request: Request):
                             {"_id": ObjectId(user_id)},
                             {"$set": {"is_pro": True, "pro_activated_at": datetime.utcnow()}}
                         )
-                        
+
                         await db.payment_transactions.update_one(
                             {"session_id": session_id},
                             {"$set": {"pro_activated": True}}
                         )
-                        
+
                         logger.info(f"Pro activated via webhook for user {user_id}")
-        
+
         return {"status": "ok"}
-        
+
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
-        return {"status": "error", "message": str(e)}
+        # Signature was valid, so answer 500 and let Stripe retry the event later
+        logger.error(f"Webhook processing error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Webhook processing error")
 
 
 # ============= ADMIN ENDPOINTS =============
 
 async def require_admin(current_user: dict = Depends(get_current_user)):
     """Dependency that ensures the current user is an admin."""
-    is_admin = current_user.get("is_admin", False) or current_user["email"].lower() in [
-        e.lower() for e in ADMIN_EMAILS
-    ]
-    if not is_admin:
+    if not current_user.get("is_admin", False):
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
 
@@ -1333,7 +1418,7 @@ async def admin_set_pro(
         update_doc["pro_granted_by"] = str(admin["_id"])
     
     result = await db.users.update_one(
-        {"_id": ObjectId(user_id)},
+        {"_id": to_object_id(user_id, "User not found")},
         {"$set": update_doc}
     )
     if result.matched_count == 0:
@@ -1350,7 +1435,7 @@ async def admin_delete_user(
     if str(admin["_id"]) == user_id:
         raise HTTPException(status_code=400, detail="Cannot delete yourself")
     
-    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    user = await db.users.find_one({"_id": to_object_id(user_id, "User not found")})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
@@ -1363,7 +1448,7 @@ async def admin_delete_user(
     await db.budgets.delete_many({"user_id": user_id})
     await db.categories.delete_many({"user_id": user_id})
     await db.payment_transactions.delete_many({"user_id": user_id})
-    await db.users.delete_one({"_id": ObjectId(user_id)})
+    await db.users.delete_one({"_id": to_object_id(user_id, "User not found")})
     
     return {"status": "deleted"}
 
@@ -1374,7 +1459,7 @@ async def admin_user_detail(
     admin: dict = Depends(require_admin),
 ):
     """Detailed view of a single user."""
-    user = await db.users.find_one({"_id": ObjectId(user_id)})
+    user = await db.users.find_one({"_id": to_object_id(user_id, "User not found")})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     

@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install packages (refresh yarn.lock when package.json changed)
+        run: |
+          if ! yarn install --frozen-lockfile --non-interactive; then
+            yarn install --non-interactive
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add yarn.lock
+            git commit -m "Aktualizacja yarn.lock [skip ci]"
+            git push
+          fi
+      - name: Type check
+        run: npx tsc --noEmit
+      - name: Bundle for Android
+        run: npx expo export --platform android --output-dir /tmp/expo-export

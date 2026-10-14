@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Ankieta – Cashflo</title>
+<meta name="description" content="Krótka ankieta Cashflo: zapisz się na wczesny dostęp i powiedz, czego potrzebujesz od aplikacji do wydatków.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://cashflo.cash/ankieta">
+<meta property="og:title" content="Ankieta Cashflo – zajmie około minuty">
+<meta property="og:description" content="Zapisz się na wczesny dostęp do Cashflo i pomóż nam dopracować aplikację.">
+<meta property="og:locale" content="pl_PL">
+<meta name="theme-color" content="#0D6A54">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@800&family=Onest:wght@500&display=swap">
+<style>
+/* The survey has its own light theme, so this page stays light */
+:root { color-scheme: light; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #F3F5F1; color: #15201B; font: 500 0.95rem/1.4 "Onest", system-ui, sans-serif; }
+.bar {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+  background: #F3F5F1;
+  border-bottom: 1px solid #D3DCD6;
+  z-index: 1;
+}
+.brand {
+  font: 800 1.35rem/1 "Bricolage Grotesque", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+  color: inherit;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dot { width: 11px; height: 11px; border-radius: 50%; background: #F5C344; box-shadow: 0 0 0 3px #0D6A54; }
+.bar a.more { color: #0D6A54; text-decoration: underline; text-underline-offset: 4px; }
+iframe { position: absolute; top: 56px; left: 0; right: 0; bottom: 0; width: 100%; height: calc(100% - 56px); border: 0; }
+noscript p { padding: 80px 16px; text-align: center; }
+</style>
+</head>
+<body>
+<header class="bar">
+  <a class="brand" href="/" aria-label="Cashflo, strona główna"><span class="dot" aria-hidden="true"></span>Cashflo</a>
+  <a class="more" href="/">O aplikacji</a>
+</header>
+<iframe data-tally-src="https://tally.so/r/PdMV1d?transparentBackground=1" width="100%" height="100%" title="Ankieta Cashflo"></iframe>
+<noscript><p>Ankieta potrzebuje włączonego JavaScriptu. <a href="https://tally.so/r/PdMV1d">Otwórz ją tutaj</a>.</p></noscript>
+<script>
+  (function () {
+    var d = document, w = "https://tally.so/widgets/embed.js";
+    var v = function () {
+      if (typeof Tally !== "undefined") Tally.loadEmbeds();
+      else d.querySelectorAll("iframe[data-tally-src]:not([src])").forEach(function (e) { e.src = e.dataset.tallySrc; });
+    };
+    if (typeof Tally !== "undefined") v();
+    else if (d.querySelector('script[src="' + w + '"]') == null) {
+      var s = d.createElement("script");
+      s.src = w; s.onload = v; s.onerror = v;
+      d.body.appendChild(s);
+    }
+  })();
+</script>
+</body>
+</html>

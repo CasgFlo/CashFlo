@@ -30,7 +30,7 @@ export default function LandingPage() {
   };
 
   const openEmail = () => {
-    Linking.openURL('mailto:hello@cashflo.cash');
+    Linking.openURL('mailto:cashflo2026@gmail.com');
   };
 
   const openTerms = () => {
@@ -302,7 +302,7 @@ export default function LandingPage() {
             <View style={styles.contactInfo}>
               <Text style={styles.contactLabel}>Email</Text>
               <TouchableOpacity onPress={openEmail}>
-                <Text style={styles.contactValue}>hello@cashflo.cash</Text>
+                <Text style={styles.contactValue}>cashflo2026@gmail.com</Text>
               </TouchableOpacity>
             </View>
           </View>

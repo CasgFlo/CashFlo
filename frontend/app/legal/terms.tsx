@@ -72,7 +72,7 @@ export default function TermsOfService() {
         </Text>
         <Text style={styles.paragraph}>
           4.4. Użytkownik może w każdej chwili usunąć swoje Konto w aplikacji (Więcej → Usuń konto)
-          albo kontaktując się z nami pod adresem hello@cashflo.cash.
+          albo kontaktując się z nami pod adresem cashflo2026@gmail.com.
         </Text>
 
         <Text style={styles.sectionTitle}>5. Usługa Premium</Text>
@@ -143,7 +143,7 @@ export default function TermsOfService() {
         <Text style={styles.paragraph}>
           W sprawach związanych z Regulaminem prosimy o kontakt:
         </Text>
-        <Text style={styles.contactInfo}>Email: hello@cashflo.cash</Text>
+        <Text style={styles.contactInfo}>Email: cashflo2026@gmail.com</Text>
       </ScrollView>
     </View>
   );

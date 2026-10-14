@@ -26,7 +26,7 @@ export default function ContactSupportScreen() {
   const [email, setEmail] = useState(user?.email || '');
   const [message, setMessage] = useState('');
 
-  const supportEmail = 'hello@cashflo.cash';
+  const supportEmail = 'cashflo2026@gmail.com';
   const styles = createStyles(colors, isDark);
 
   const handleSendEmail = () => {
@@ -75,7 +75,7 @@ ${message}
     },
     {
       question: 'Jak anulować subskrypcję Pro?',
-      answer: 'Napisz do nas na hello@cashflo.cash, a pomożemy Ci anulować subskrypcję.',
+      answer: 'Napisz do nas na cashflo2026@gmail.com, a pomożemy Ci anulować subskrypcję.',
     },
   ];
 

@@ -48,7 +48,7 @@ export default function PrivacyPolicy() {
           Administratorem Twoich danych osobowych jest CashFlo z siedzibą w Polsce.
         </Text>
         <Text style={styles.paragraph}>
-          Kontakt w sprawach związanych z ochroną danych: hello@cashflo.cash
+          Kontakt w sprawach związanych z ochroną danych: cashflo2026@gmail.com
         </Text>
 
         <Text style={styles.sectionTitle}>2. Jakie dane zbieramy</Text>
@@ -114,14 +114,14 @@ export default function PrivacyPolicy() {
         <Text style={styles.listItem}>• <Text style={styles.bold}>Prawo do sprzeciwu</Text> - wobec przetwarzania opartego na prawnie uzasadnionym interesie</Text>
         <Text style={styles.listItem}>• <Text style={styles.bold}>Prawo do cofnięcia zgody</Text> - w dowolnym momencie</Text>
         <Text style={styles.paragraph}>
-          Aby skorzystać z tych praw, skontaktuj się z nami: hello@cashflo.cash
+          Aby skorzystać z tych praw, skontaktuj się z nami: cashflo2026@gmail.com
         </Text>
 
         <Text style={styles.sectionTitle}>9. Kontakt</Text>
         <Text style={styles.paragraph}>
           W sprawach związanych z ochroną danych osobowych prosimy o kontakt:
         </Text>
-        <Text style={styles.contactInfo}>Email: hello@cashflo.cash</Text>
+        <Text style={styles.contactInfo}>Email: cashflo2026@gmail.com</Text>
 
         <View style={styles.rightsBox}>
           <Ionicons name="shield-checkmark" size={24} color={BRAND_GREEN} />

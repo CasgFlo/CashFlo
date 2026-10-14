@@ -144,7 +144,7 @@ export default function PaymentSuccessScreen() {
           <Text style={styles.errorTitle}>Coś poszło nie tak</Text>
           <Text style={styles.errorMessage}>{message}</Text>
           <Text style={styles.contact}>
-            Skontaktuj się z nami: hello@cashflo.cash
+            Skontaktuj się z nami: cashflo2026@gmail.com
           </Text>
         </View>
       )}

@@ -4,6 +4,8 @@ Aplikacja mobilna do śledzenia wydatków, budżetu i celów oszczędnościowych
 
 - `frontend/` – aplikacja na telefon (Expo / React Native, Expo Router)
 - `backend/` – serwer API (FastAPI + MongoDB)
+- `site/` – strona cashflo.cash z formularzem zapisów (Tally) i `cashflo.cash/ankieta`; osobna usługa `www`
+  na Railway (Caddy w Dockerze), domena przez Cloudflare (CNAME z proxy, SSL/TLS „Full”)
 
 ## Uruchomienie lokalne
 

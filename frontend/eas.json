@@ -10,12 +10,12 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://SET-AFTER-SERVER-DEPLOY"
+        "EXPO_PUBLIC_BACKEND_URL": "https://api-production-affb.up.railway.app"
       }
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://SET-AFTER-SERVER-DEPLOY"
+        "EXPO_PUBLIC_BACKEND_URL": "https://api-production-affb.up.railway.app"
       }
     }
   },

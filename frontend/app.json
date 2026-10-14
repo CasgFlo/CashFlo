@@ -63,7 +63,8 @@
       ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -94,7 +95,8 @@
         "expo-image-picker",
         {
           "photosPermission": "Wybieraj zdjęcia paragonów z galerii, aby dołączać je do wydatków",
-          "cameraPermission": "Rób zdjęcia paragonów, aby dołączać je do wydatków"
+          "cameraPermission": "Rób zdjęcia paragonów, aby dołączać je do wydatków",
+          "microphonePermission": false
         }
       ],
       "@react-native-community/datetimepicker",
@@ -103,6 +105,11 @@
     ],
     "experiments": {
       "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "c42d9f90-ad9c-447b-8b83-97b39b29a528"
+      }
     }
   }
 }

@@ -302,7 +302,7 @@ const createStyles = (colors: ThemeColors) =>
       borderRadius: radius.md,
       paddingHorizontal: space.lg,
     },
-    sheetInput: { flex: 1, fontSize: 28, fontWeight: '800', color: colors.text, paddingVertical: space.md },
+    sheetInput: { flex: 1, minWidth: 0, fontSize: 28, fontWeight: '800', color: colors.text, paddingVertical: space.md },
     sheetCurrency: { fontSize: 20, fontWeight: '700', color: colors.textSecondary },
     errorText: { color: colors.error, fontSize: 14, marginTop: space.sm },
     sheetButtons: { flexDirection: 'row', gap: space.md, marginTop: space.lg },

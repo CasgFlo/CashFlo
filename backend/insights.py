@@ -154,6 +154,10 @@ def detect_recurring(
         amounts = [t["amount"] for t in unique]
         if max(amounts) > 1.35 * min(amounts) + 2:
             continue
+        # Shops people simply visit often need three repeats (or the same amount twice);
+        # well-known subscriptions are recognised after two
+        if not key.startswith("brand:") and len(unique) < 3 and max(amounts) > 1.05 * min(amounts):
+            continue
         gaps = [(b["date"].date() - a["date"].date()).days for a, b in zip(unique, unique[1:])]
 
         if all(20 <= g <= 45 for g in gaps):
@@ -354,9 +358,15 @@ def build_monthly_report(
         top = categories[0]
         add("pie-chart", f"Najwięcej poszło na: {top['name']} ({round(top['share'] * 100)}% wydatków).", "neutral", "top")
 
-    if biggest is not None and len(expense_rows) >= 3:
-        what = biggest.get("description") or biggest.get("category")
-        add("receipt", f"Największy pojedynczy wydatek: {pln(biggest['amount'])} ({what}).", "neutral", "biggest")
+    # The biggest one-off purchase says more than the rent does
+    one_off = [
+        t for t in expense_rows
+        if not t.get("recurring_id") and not any(e in fold(t.get("category") or "") for e in _ESSENTIAL)
+    ]
+    biggest_one_off = max(one_off, key=lambda t: t["amount"], default=None)
+    if biggest_one_off is not None and len(expense_rows) >= 3:
+        what = biggest_one_off.get("description") or biggest_one_off.get("category")
+        add("receipt", f"Największy jednorazowy wydatek: {pln(biggest_one_off['amount'])} ({what}).", "neutral", "biggest")
 
     tip = None
     flexible = [c for c in categories if not any(e in fold(c["name"]) for e in _ESSENTIAL) and c["amount"] >= 100]

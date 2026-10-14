@@ -52,7 +52,11 @@ def test_detect_monthly_subscription_and_bill():
         tx(date(2026, 8, 5), 43.0, "NETFLIX.COM", "Rozrywka"),
         tx(date(2026, 9, 5), 49.0, "NETFLIX.COM", "Rozrywka"),
         tx(date(2026, 10, 5), 49.0, "NETFLIX.COM", "Rozrywka"),
+        tx(date(2026, 7, 20), 175.0, "PGE Obrót faktura", "Dom i Rachunki"),
         tx(date(2026, 8, 20), 182.4, "PGE Obrót faktura", "Dom i Rachunki"),
+        # a shop visited twice with different amounts is not a fixed payment
+        tx(date(2026, 8, 17), 25.0, "Apteka DOZ", "Zdrowie"),
+        tx(date(2026, 9, 17), 61.0, "Apteka DOZ", "Zdrowie"),
         tx(date(2026, 9, 21), 201.1, "PGE Obrót faktura", "Dom i Rachunki"),
         # one-off purchases, never repeated
         tx(date(2026, 9, 2), 300.0, "Allegro", "Zakupy"),

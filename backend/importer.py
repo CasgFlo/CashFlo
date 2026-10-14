@@ -459,6 +459,10 @@ _NOISE_PATTERNS = [
     r"\b\d{2}:\d{2}(:\d{2})?\b",
     r"\b\d{3,}\b",
     r"\b[a-z]{2}\d{2}(\s?\d{4}){4,7}\b",  # IBAN
+    r"\bsp\.?\s*z\s*o\.?\s*o\.?(?=\s|$)",  # sp. z o.o.
+    r"\bsp\.?\s*(j|k|p)\.?(?=\s|$)",       # sp.j., sp.k.
+    r"\bs\.\s?a\.?(?=\s|$)",               # S.A.
+    r"\bnr\b\.?",
 ]
 _LABELS = [
     "numer karty", "nr karty", "data wykonania", "oryginalna kwota operacji", "numer rachunku", "nr rachunku",

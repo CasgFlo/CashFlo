@@ -1776,7 +1776,7 @@ async def undo_import(import_id: str, current_user: dict = Depends(get_current_u
 
 # ============= MONTHLY SUMMARY =============
 
-REPORT_FIELDS = {"date": 1, "amount": 1, "type": 1, "category": 1, "description": 1}
+REPORT_FIELDS = {"date": 1, "amount": 1, "type": 1, "category": 1, "description": 1, "recurring_id": 1}
 
 
 @api_router.get("/reports/monthly")

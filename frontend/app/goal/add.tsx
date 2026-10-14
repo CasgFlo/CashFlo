@@ -187,7 +187,7 @@ const createStyles = (colors: ThemeColors) =>
       borderColor: colors.border,
       paddingHorizontal: space.lg,
     },
-    amountInput: { flex: 1, fontSize: 24, fontWeight: '800', color: colors.text, paddingVertical: 12 },
+    amountInput: { flex: 1, minWidth: 0, fontSize: 24, fontWeight: '800', color: colors.text, paddingVertical: 12 },
     currency: { fontSize: 18, fontWeight: '700', color: colors.textSecondary },
     dateButton: {
       flexDirection: 'row',

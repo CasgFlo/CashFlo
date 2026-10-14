@@ -25,8 +25,8 @@ export const PRO_FEATURES: ProFeature[] = [
   {
     icon: 'document-text',
     title: 'Podsumowanie miesiąca',
-    free: 'Podstawowe',
-    pro: 'Pełne: porównania i porady',
+    free: 'Skrót',
+    pro: 'Pełne',
   },
   {
     icon: 'speedometer',

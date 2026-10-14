@@ -76,7 +76,9 @@ export default function RecurringEditScreen() {
             setActive(r.active);
           }
         } else {
-          const first = cats.find((c) => (c.type || 'expense') === 'expense');
+          // Recurring payments are most often bills
+          const expense = cats.filter((c) => (c.type || 'expense') === 'expense');
+          const first = expense.find((c) => c.name === 'Dom i Rachunki') || expense[0];
           if (first) setCategory(first.name);
         }
       } catch (e) {
@@ -334,7 +336,7 @@ const createStyles = (colors: ThemeColors) =>
       borderColor: colors.border,
       paddingHorizontal: space.lg,
     },
-    amountInput: { flex: 1, fontSize: 26, fontWeight: '800', color: colors.text, paddingVertical: 10 },
+    amountInput: { flex: 1, minWidth: 0, fontSize: 26, fontWeight: '800', color: colors.text, paddingVertical: 10 },
     currency: { fontSize: 20, fontWeight: '700', color: colors.textSecondary },
     chips: { flexDirection: 'row', flexWrap: 'wrap' },
     hint: { fontSize: 13, color: colors.textSecondary, marginTop: space.sm, lineHeight: 18 },

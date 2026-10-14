@@ -533,7 +533,12 @@ export default function ImportScreen() {
               />
               {chosen.length > 0 ? (
                 <Text style={[styles.bottomHint, tabular]}>
-                  −{formatCurrency(chosenExpenses)} wydatków · +{formatCurrency(chosenIncome)} przychodów
+                  {[
+                    chosenExpenses > 0 ? `−${formatCurrency(chosenExpenses)} wydatków` : null,
+                    chosenIncome > 0 ? `+${formatCurrency(chosenIncome)} przychodów` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 </Text>
               ) : null}
             </>
@@ -603,7 +608,7 @@ export default function ImportScreen() {
         </View>
 
         {error ? <Text style={[styles.errorText, { textAlign: 'center' }]}>{error}</Text> : null}
-        <Button title="Wybierz plik CSV lub Excel" icon="document-attach-outline" onPress={pickFile} style={{ marginTop: space.md }} />
+        <Button title="Wybierz plik CSV lub Excel" icon="folder-open-outline" onPress={pickFile} style={{ marginTop: space.md }} />
         <Text style={styles.centerNote}>
           {pro
             ? 'W CashFlo Pro importujesz bez limitu.'

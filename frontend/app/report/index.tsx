@@ -72,7 +72,6 @@ export default function MonthlyReportScreen() {
 
   const openPro = () => router.push('/pro/upgrade');
   const r = report;
-  const savingsPct = r && r.savings_rate !== null ? Math.round(r.savings_rate * 100) : null;
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -130,11 +129,6 @@ export default function MonthlyReportScreen() {
                 {r.balance >= 0 ? '+' : '−'}
                 {formatCurrency(Math.abs(r.balance))}
               </Text>
-              {savingsPct !== null ? (
-                <Text style={styles.heroSub}>
-                  {r.balance >= 0 ? `Zostało ${savingsPct}% przychodów` : 'Wydatki wyższe niż przychody'}
-                </Text>
-              ) : null}
               <View style={styles.heroDivider} />
               <View style={styles.heroRow}>
                 <View style={styles.heroCol}>
@@ -286,7 +280,6 @@ const createStyles = (colors: ThemeColors) =>
     hero: { backgroundColor: colors.primary, borderRadius: radius.lg, padding: space.xl, marginBottom: space.md },
     heroLabel: { color: colors.onPrimary, opacity: 0.85, fontSize: 14, fontWeight: '600' },
     heroAmount: { color: colors.onPrimary, fontSize: 36, fontWeight: '800', letterSpacing: -0.6, marginTop: 4 },
-    heroSub: { color: colors.onPrimary, opacity: 0.9, fontSize: 14, marginTop: 2 },
     heroDivider: { height: 1, backgroundColor: colors.onPrimary, opacity: 0.18, marginVertical: space.lg },
     heroRow: { flexDirection: 'row' },
     heroCol: { flex: 1 },

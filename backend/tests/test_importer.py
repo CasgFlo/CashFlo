@@ -74,6 +74,9 @@ def test_clean_description():
     assert clean_description(pko) == "Netflix.com"
     assert "4251" not in clean_description(["ORLEN STACJA NR 123 Nr karty: 4251********1234"])
     assert clean_description(["", "  "]) == ""
+    assert clean_description(["ORLEN STACJA NR 123"]) == "Orlen Stacja"
+    assert clean_description(["WYNAGRODZENIE ACME SP Z O O"]) == "Wynagrodzenie Acme"
+    assert clean_description(["PGE Obrót S.A."]) == "PGE Obrót"
 
 
 # ---------------------------------------------------------------- categories

@@ -245,3 +245,40 @@ def test_stats_and_account_deletion_remove_everything(client):
     assert r.status_code == 200
     for name in server.USER_DATA_COLLECTIONS:
         assert client.portal.call(server.db[name].count_documents, {"user_id": me["id"]}) == 0
+
+
+def test_tally_waitlist_webhook_sends_one_thank_you(client, monkeypatch):
+    import base64
+    import hashlib
+    import hmac
+    import json
+
+    sent = []
+    monkeypatch.setattr(server, "TALLY_SIGNING_SECRET", "tally-test-secret")
+    monkeypatch.setattr(server, "smtp_ready", lambda: True)
+    monkeypatch.setattr(server, "send_email", lambda to, subject, body, reply_to=None: sent.append((to, subject)))
+
+    payload = {
+        "eventId": "evt-1",
+        "eventType": "FORM_RESPONSE",
+        "createdAt": "2026-10-15T00:00:00.000Z",
+        "data": {
+            "responseId": f"resp-{uuid.uuid4().hex[:6]}",
+            "formId": "PdMV1d",
+            "fields": [
+                {"key": "question_1", "label": "Twój adres e-mail", "type": "INPUT_EMAIL", "value": "tester@example.com"},
+                {"key": "question_2", "label": "Zgoda", "type": "CHECKBOXES", "value": ["ok"]},
+            ],
+        },
+    }
+    body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()
+    signature = base64.b64encode(hmac.new(b"tally-test-secret", body, hashlib.sha256).digest()).decode()
+    headers = {"Tally-Signature": signature, "Content-Type": "application/json"}
+
+    assert client.post("/api/webhook/tally", content=body, headers={"Tally-Signature": "wrong"}).status_code == 401
+    r = client.post("/api/webhook/tally", content=body, headers=headers)
+    assert r.status_code == 200 and r.json()["status"] == "sent"
+    assert sent == [("tester@example.com", "Jesteś na liście Cashflo")]
+    # Tally retried the same delivery: no second e-mail
+    r = client.post("/api/webhook/tally", content=body, headers=headers)
+    assert r.json()["status"] == "already_sent" and len(sent) == 1

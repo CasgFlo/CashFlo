@@ -17,8 +17,10 @@ from typing import Literal
 from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 import calendar
+import base64
 import hashlib
 import hmac
+import json
 import html
 import re
 import secrets
@@ -76,6 +78,9 @@ SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
 SMTP_USER = os.environ.get('SMTP_USER', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 SMTP_FROM = os.environ.get('SMTP_FROM', '') or SMTP_USER
+
+# Waitlist form on cashflo.cash (Tally): signed webhook -> thank-you e-mail to the person who signed up
+TALLY_SIGNING_SECRET = os.environ.get('TALLY_SIGNING_SECRET', '')
 
 # Free plan limits
 FREE_GOAL_LIMIT = 1
@@ -334,12 +339,14 @@ def smtp_ready() -> bool:
     return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
 
 
-def send_email(to: str, subject: str, body: str) -> None:
+def send_email(to: str, subject: str, body: str, reply_to: Optional[str] = None) -> None:
     """Send a plain-text e-mail through the configured SMTP server (blocking: run it in a thread)."""
     msg = EmailMessage()
     msg["From"] = SMTP_FROM
     msg["To"] = to
     msg["Subject"] = subject
+    if reply_to:
+        msg["Reply-To"] = reply_to
     msg.set_content(body)
     context = ssl.create_default_context()
     if SMTP_PORT == 465:
@@ -2114,6 +2121,91 @@ async def create_billing_portal(
         raise HTTPException(status_code=502, detail="Could not open subscription settings")
 
     return {"url": sget(portal, "url")}
+
+
+# ============= WAITLIST (Tally form on cashflo.cash) =============
+
+WAITLIST_EMAIL_SUBJECT = "Jesteś na liście Cashflo"
+WAITLIST_EMAIL_BODY = """Cześć!
+
+Dziękujemy za zapis na wczesny dostęp do Cashflo i za odpowiedzi w ankiecie.
+Bardzo pomogą nam dopasować aplikację i jej cenę.
+
+Co dalej? Napiszemy, gdy aplikacja będzie gotowa do testów albo do pobrania.
+Nie wysyłamy spamu.
+
+Masz pomysł albo pytanie? Po prostu odpisz na tego maila.
+
+Jeśli to nie Ty albo chcesz zrezygnować z listy, odpisz „wypisz”, a usuniemy Twój adres.
+
+Zespół Cashflo
+https://cashflo.cash
+"""
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def tally_signature_valid(raw_body: bytes, signature: Optional[str]) -> bool:
+    """Tally signs the JSON payload with HMAC-SHA256 (base64) using the webhook's signing secret."""
+    if not signature or not TALLY_SIGNING_SECRET:
+        return False
+    key = TALLY_SIGNING_SECRET.encode()
+    candidates = [raw_body]
+    try:
+        # Tally computes it over JSON.stringify(payload); compact JSON matches that if the body was re-formatted
+        candidates.append(json.dumps(json.loads(raw_body), separators=(",", ":"), ensure_ascii=False).encode())
+    except ValueError:
+        pass
+    for body in candidates:
+        expected = base64.b64encode(hmac.new(key, body, hashlib.sha256).digest()).decode()
+        if hmac.compare_digest(expected, signature.strip()):
+            return True
+    return False
+
+
+@api_router.post("/webhook/tally")
+async def tally_webhook(request: Request):
+    """New sign-up on the waitlist form: send the person a short thank-you e-mail (once per submission)."""
+    if not TALLY_SIGNING_SECRET:
+        raise HTTPException(status_code=503, detail="Tally webhook not configured")
+    raw = await request.body()
+    if not tally_signature_valid(raw, request.headers.get("Tally-Signature")):
+        raise HTTPException(status_code=401, detail="Invalid signature")
+    try:
+        event = json.loads(raw)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    if event.get("eventType") != "FORM_RESPONSE":
+        return {"status": "ignored"}
+
+    data = event.get("data") or {}
+    response_id = str(data.get("responseId") or data.get("submissionId") or event.get("eventId") or "")
+    email = ""
+    for field in data.get("fields") or []:
+        if field.get("type") == "INPUT_EMAIL" and isinstance(field.get("value"), str):
+            email = field["value"].strip()
+            break
+    if not response_id or not EMAIL_RE.match(email or ""):
+        return {"status": "ignored"}
+
+    # Tally retries deliveries: remember which submissions were answered (no e-mail address is stored)
+    key = hashlib.sha256(f"tally:{response_id}".encode()).hexdigest()
+    already = await db.waitlist_notifications.find_one({"_id": key})
+    if already and already.get("sent"):
+        return {"status": "already_sent"}
+    if not smtp_ready():
+        logger.error("Waitlist sign-up received, but SMTP is not configured")
+        raise HTTPException(status_code=503, detail="E-mail not configured")
+    try:
+        await run_in_threadpool(send_email, email, WAITLIST_EMAIL_SUBJECT, WAITLIST_EMAIL_BODY, SMTP_USER or None)
+    except Exception as e:
+        logger.error(f"Could not send waitlist e-mail: {e}")
+        raise HTTPException(status_code=502, detail="Could not send e-mail")  # Tally will retry
+    await db.waitlist_notifications.update_one(
+        {"_id": key}, {"$set": {"sent": True, "sent_at": datetime.utcnow()}}, upsert=True
+    )
+    logger.info("Waitlist thank-you e-mail sent")
+    return {"status": "sent"}
 
 
 @api_router.post("/webhook/stripe")

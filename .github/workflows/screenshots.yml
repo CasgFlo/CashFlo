@@ -1,0 +1,73 @@
+name: Screenshots
+
+# Renders the app (web build) with sample data and pushes phone-sized screenshots
+# to the ci-screenshots branch, for reviewing screens without a phone.
+on:
+  push:
+    branches: [pro-features]
+    paths: ["frontend/**", "backend/**", ".github/screenshots/**", ".github/workflows/screenshots.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: screenshots
+  cancel-in-progress: true
+
+jobs:
+  screenshots:
+    runs-on: ubuntu-latest
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+    env:
+      MONGO_URL: mongodb://localhost:27017
+      DB_NAME: cashflo_shots
+      JWT_SECRET_KEY: screenshots-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Start the server
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt httpx
+          nohup uvicorn server:app --port 8000 > ../server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8000/api/health && break; sleep 1; done
+      - name: Sample data
+        working-directory: .github/screenshots
+        run: python seed.py
+      - name: Build the web app
+        working-directory: frontend
+        env:
+          EXPO_PUBLIC_BACKEND_URL: http://localhost:8000
+        run: |
+          yarn install --frozen-lockfile --non-interactive
+          npx expo export --platform web --output-dir ../web-dist
+      - name: Screenshots
+        working-directory: .github/screenshots
+        run: |
+          nohup npx --yes serve@14 -s ../../web-dist -l 3000 > serve.log 2>&1 &
+          npm init -y > /dev/null
+          npm install playwright@1.49.1 > /dev/null
+          npx playwright install --with-deps chromium > /dev/null
+          for i in $(seq 1 30); do curl -sf localhost:3000 > /dev/null && break; sleep 1; done
+          node shoot.mjs
+          cp ../../server.log shots/server.log || true
+      - name: Publish to the ci-screenshots branch
+        working-directory: .github/screenshots/shots
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git init -q
+          git checkout -q -b ci-screenshots
+          git add .
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" commit -qm "Screenshots for ${GITHUB_SHA::7}"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ci-screenshots
+          echo "::notice title=screenshots::$(cat problems.txt | head -c 900)"

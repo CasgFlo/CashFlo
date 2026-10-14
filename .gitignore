@@ -1,0 +1,12 @@
+node_modules/
+.expo/
+dist/
+web-build/
+.env
+.env.*
+!.env.example
+__pycache__/
+*.pyc
+.ruff_cache/
+.DS_Store
+*.log

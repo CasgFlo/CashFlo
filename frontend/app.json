@@ -1,0 +1,105 @@
+{
+  "expo": {
+    "name": "CashFlo",
+    "slug": "cashflo-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "cashflo",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "description": "CashFlo - Inteligentne zarządzanie finansami osobistymi. Śledź wydatki, ustaw budżet i osiągaj cele oszczędnościowe.",
+    "primaryColor": "#2F5B4C",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F5F1EA"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "cash.cashflo.mobile",
+      "buildNumber": "1",
+      "infoPlist": {
+        "NSCameraUsageDescription": "Skanuj paragony aby śledzić wydatki",
+        "NSPhotoLibraryUsageDescription": "Dodawaj zdjęcia paragonów z galerii",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "associatedDomains": [
+        "applinks:cashflo.cash",
+        "applinks:www.cashflo.cash"
+      ]
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#F5F1EA"
+      },
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ],
+      "package": "cash.cashflo.mobile",
+      "versionCode": 1,
+      "edgeToEdgeEnabled": true,
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "autoVerify": true,
+          "data": [
+            {
+              "scheme": "https",
+              "host": "cashflo.cash"
+            },
+            {
+              "scheme": "https",
+              "host": "www.cashflo.cash"
+            }
+          ],
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
+        }
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/images/favicon.png",
+      "name": "CashFlo - Zarządzanie Finansami",
+      "shortName": "CashFlo",
+      "lang": "pl",
+      "themeColor": "#2F5B4C",
+      "backgroundColor": "#F5F1EA",
+      "description": "CashFlo - Inteligentne zarządzanie finansami osobistymi. Śledź wydatki, ustaw budżet i osiągaj cele oszczędnościowe.",
+      "display": "standalone",
+      "orientation": "portrait"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/images/splash-icon.png",
+          "imageWidth": 200,
+          "resizeMode": "contain",
+          "backgroundColor": "#F5F1EA"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Wybierz zdjęcie paragonu z galerii",
+          "cameraPermission": "Zrób zdjęcie paragonu kamerą"
+        }
+      ],
+      "@react-native-community/datetimepicker",
+      "expo-web-browser",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

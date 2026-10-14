@@ -12,3 +12,6 @@ passlib>=1.7.4
 tzdata>=2024.2
 # Official Stripe library (pinned below 13: the payment code reads Stripe objects dict-style)
 stripe>=11,<13
+# File uploads (bank statement import) and Excel files (import and export)
+python-multipart==0.0.9
+openpyxl==3.1.5

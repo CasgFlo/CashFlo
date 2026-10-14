@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request, Query, UploadFile, File
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -7,13 +7,14 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional, Dict
-from datetime import datetime, timedelta
+from typing import Any, List, Optional, Dict
+from datetime import date, datetime, time as dtime, timedelta
+from collections import Counter
 from passlib.context import CryptContext
 import jwt
 from bson import ObjectId
 from typing import Literal
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from starlette.concurrency import run_in_threadpool
 import calendar
 import hashlib
@@ -25,6 +26,10 @@ import smtplib
 import ssl
 from email.message import EmailMessage
 import stripe
+
+import importer
+import insights
+import exporter
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -75,6 +80,8 @@ SMTP_FROM = os.environ.get('SMTP_FROM', '') or SMTP_USER
 # Free plan limits
 FREE_GOAL_LIMIT = 1
 FREE_CUSTOM_CATEGORY_LIMIT = 3
+FREE_IMPORT_LIMIT = 1          # bank statement / spreadsheet imports
+FREE_RECURRING_LIMIT = 3       # active recurring payments
 
 # Receipts are stored as data URLs; keep them small so lists stay fast
 MAX_RECEIPT_CHARS = 2_500_000
@@ -178,6 +185,8 @@ class TransactionResponse(BaseModel):
     is_recurring: bool
     recurring_day: Optional[int] = None
     recurring_parent_id: Optional[str] = None
+    recurring_id: Optional[str] = None   # the recurring payment this transaction came from
+    imported: bool = False               # added by importing a bank statement / spreadsheet
     receipt_image: Optional[str] = None
     has_receipt: bool = False
     created_at: datetime
@@ -227,11 +236,8 @@ class GoalResponse(BaseModel):
 # Budget Models
 class BudgetCreate(BaseModel):
     monthly_limit: float = Field(ge=0, lt=100_000_000)
-    category_limits: Optional[dict] = {}
-
-class BudgetUpdate(BaseModel):
-    monthly_limit: Optional[float] = None
-    category_limits: Optional[dict] = None
+    # Pro: spending limit per expense category, e.g. {"Jedzenie i Picie": 800}
+    category_limits: Optional[Dict[str, float]] = None
 
 class BudgetResponse(BaseModel):
     id: str
@@ -239,6 +245,8 @@ class BudgetResponse(BaseModel):
     monthly_limit: float
     category_limits: dict
     current_month_spending: float
+    category_spending: Dict[str, float] = {}   # this month, for categories that have a limit
+    category_limits_active: bool = False       # limits are a Pro feature
 
 
 # Stats Models
@@ -598,6 +606,17 @@ class DeleteAccountRequest(BaseModel):
     password: str
 
 
+USER_DATA_COLLECTIONS = (
+    "transactions", "goals", "budgets", "categories",
+    "recurring_payments", "recurring_dismissed", "imports", "import_sessions",
+)
+
+
+async def delete_user_data(user_id: str) -> None:
+    for name in USER_DATA_COLLECTIONS:
+        await db[name].delete_many({"user_id": user_id})
+
+
 async def cancel_stripe_subscription(user: dict) -> None:
     """Cancel the user's Stripe subscription so they are not charged again.
 
@@ -638,10 +657,7 @@ async def delete_own_account(
     await cancel_stripe_subscription(current_user)
 
     user_id = str(current_user["_id"])
-    await db.transactions.delete_many({"user_id": user_id})
-    await db.goals.delete_many({"user_id": user_id})
-    await db.budgets.delete_many({"user_id": user_id})
-    await db.categories.delete_many({"user_id": user_id})
+    await delete_user_data(user_id)
     # Keep payment records for accounting, but strip everything that identifies the person
     await db.payment_transactions.update_many(
         {"user_id": user_id},
@@ -668,9 +684,11 @@ def transaction_to_response(t: dict, include_receipt: bool = True) -> Transactio
         category=t["category"],
         description=t.get("description") or "",
         date=t["date"],
-        is_recurring=t.get("is_recurring", False),
+        is_recurring=bool(t.get("is_recurring") or t.get("recurring_id")),
         recurring_day=t.get("recurring_day"),
         recurring_parent_id=t.get("recurring_parent_id"),
+        recurring_id=t.get("recurring_id"),
+        imported=bool(t.get("import_id")),
         receipt_image=receipt if include_receipt else None,
         has_receipt=bool(receipt) if include_receipt else bool(t.get("has_receipt")),
         created_at=t["created_at"],
@@ -683,103 +701,149 @@ async def create_transaction(
     current_user: dict = Depends(get_current_user)
 ):
     validate_receipt(transaction.receipt_image)
-
-    # For recurring transactions: set the date to the first occurrence (current month at recurring_day)
-    tx_date = transaction.date
-    if transaction.is_recurring and transaction.recurring_day:
-        now = datetime.utcnow()
-        last_day = calendar.monthrange(now.year, now.month)[1]
-        # Day out of range for this month (e.g. 31 in April) -> last day of the month
-        tx_date = datetime(now.year, now.month, min(transaction.recurring_day, last_day))
+    user_id = str(current_user["_id"])
+    now = datetime.utcnow()
 
     transaction_dict = {
-        "user_id": str(current_user["_id"]),
+        "user_id": user_id,
         "amount": round(transaction.amount, 2),
         "type": transaction.type,
         "category": transaction.category.strip(),
         "description": (transaction.description or "").strip(),
-        "date": tx_date,
-        "is_recurring": transaction.is_recurring,
-        "recurring_day": transaction.recurring_day if transaction.is_recurring else None,
+        "date": transaction.date,
+        "is_recurring": False,
+        "recurring_day": None,
         "recurring_parent_id": None,
         "receipt_image": transaction.receipt_image,
-        "created_at": datetime.utcnow()
+        "created_at": now,
     }
 
+    # "Repeat every month": this transaction is the first payment, the next ones are added automatically
+    if transaction.is_recurring:
+        await ensure_can_add_recurring(current_user)
+        first_day = transaction.date.date()
+        anchor = transaction.recurring_day or first_day.day
+        recurring_doc = {
+            "user_id": user_id,
+            "name": transaction_dict["description"] or transaction_dict["category"],
+            "amount": transaction_dict["amount"],
+            "type": transaction.type,
+            "category": transaction_dict["category"],
+            "frequency": "monthly",
+            "anchor_day": anchor,
+            "next_date": insights.at_noon(insights.next_occurrence(first_day, "monthly", anchor)),
+            "is_subscription": False,
+            "active": True,
+            "source": "transaction",
+            "created_at": now,
+        }
+        result = await db.recurring_payments.insert_one(recurring_doc)
+        transaction_dict["recurring_id"] = str(result.inserted_id)
+
     result = await db.transactions.insert_one(transaction_dict)
+    transaction_dict["_id"] = result.inserted_id
     return transaction_to_response(transaction_dict)
 
 
-async def process_recurring_transactions(user_id: str):
-    """
-    Generate missing occurrences of recurring transactions up to today.
-    Each recurring template (transaction with is_recurring=True and recurring_day set)
-    spawns child transactions (recurring_parent_id=template.id) every month.
-    """
-    import calendar
-    
-    # Find all recurring templates for this user
+# ============= RECURRING PAYMENTS =============
+#
+# A recurring payment (rent, phone, Netflix, salary...) has the date of its next payment.
+# Whenever the app loads data, payments that are due are added as ordinary transactions
+# (linked by recurring_id) and next_date moves on. No background job is needed.
+
+RECURRING_MAX_CATCHUP = 60
+
+
+def _end_of_today() -> datetime:
+    now = datetime.utcnow()
+    return datetime(now.year, now.month, now.day, 23, 59, 59)
+
+
+async def migrate_legacy_recurring(user_id: str) -> None:
+    """Older app versions marked a transaction as a monthly template; turn those into recurring payments."""
     templates = await db.transactions.find({
         "user_id": user_id,
         "is_recurring": True,
-        "recurring_day": {"$ne": None, "$exists": True},
-        "recurring_parent_id": None  # Only templates, not children
-    }).to_list(1000)
-    
-    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    new_transactions = []
-    
+        "recurring_parent_id": None,
+        "recurring_id": None,
+    }).to_list(200)
     for template in templates:
-        recurring_day = template.get("recurring_day")
-        if not recurring_day:
-            continue
-        
-        # Find latest child or use template's own date
-        latest_child = await db.transactions.find_one(
-            {"recurring_parent_id": str(template["_id"])},
-            sort=[("date", -1)]
+        day = template.get("recurring_day") or template["date"].day
+        latest = await db.transactions.find_one(
+            {"recurring_parent_id": str(template["_id"])}, sort=[("date", -1)]
         )
-        
-        if latest_child:
-            base_date = latest_child["date"]
-        else:
-            base_date = template["date"]
-        
-        # Generate next occurrences from base_date forward, until > today
-        next_year = base_date.year
-        next_month = base_date.month
-        
-        while True:
-            # Advance to next month
-            next_month += 1
-            if next_month > 12:
-                next_month = 1
-                next_year += 1
-            
-            # Clamp day to last valid day of target month
-            last_day = calendar.monthrange(next_year, next_month)[1]
-            day = min(recurring_day, last_day)
-            
-            next_date = datetime(next_year, next_month, day)
-            if next_date > today:
-                break
-            
-            new_transactions.append({
+        last_date = (latest or template)["date"].date()
+        rec = await db.recurring_payments.insert_one({
+            "user_id": user_id,
+            "name": (template.get("description") or "").strip() or template["category"],
+            "amount": template["amount"],
+            "type": template["type"],
+            "category": template["category"],
+            "frequency": "monthly",
+            "anchor_day": day,
+            "next_date": insights.at_noon(insights.next_occurrence(last_date, "monthly", day)),
+            "is_subscription": False,
+            "active": True,
+            "source": "legacy",
+            "created_at": datetime.utcnow(),
+        })
+        rec_id = str(rec.inserted_id)
+        await db.transactions.update_one({"_id": template["_id"]}, {"$set": {"recurring_id": rec_id, "is_recurring": False}})
+        await db.transactions.update_many({"recurring_parent_id": str(template["_id"])}, {"$set": {"recurring_id": rec_id}})
+
+
+async def process_due_recurring(user_id: str) -> int:
+    """Add the transactions of recurring payments that are due (today or missed days). Returns how many."""
+    await migrate_legacy_recurring(user_id)
+    cutoff = _end_of_today()
+    created = 0
+    due = await db.recurring_payments.find({
+        "user_id": user_id,
+        "active": True,
+        "next_date": {"$lte": cutoff},
+    }).to_list(500)
+    for rec in due:
+        frequency = rec.get("frequency", "monthly")
+        anchor = rec.get("anchor_day")
+        current = rec["next_date"].date()
+        dates = []
+        while insights.at_noon(current) <= cutoff and len(dates) < RECURRING_MAX_CATCHUP:
+            dates.append(current)
+            current = insights.next_occurrence(current, frequency, anchor)
+        # Claim the payment first, so two requests at the same time can't add it twice
+        claimed = await db.recurring_payments.update_one(
+            {"_id": rec["_id"], "next_date": rec["next_date"]},
+            {"$set": {"next_date": insights.at_noon(current), "last_generated_at": datetime.utcnow()}},
+        )
+        if claimed.modified_count == 0 or not dates:
+            continue
+        now = datetime.utcnow()
+        await db.transactions.insert_many([
+            {
                 "user_id": user_id,
-                "amount": template["amount"],
-                "type": template["type"],
-                "category": template["category"],
-                "description": template.get("description", ""),
-                "date": next_date,
+                "amount": rec["amount"],
+                "type": rec.get("type", "expense"),
+                "category": rec["category"],
+                "description": rec.get("name", ""),
+                "date": insights.at_noon(day),
                 "is_recurring": False,
                 "recurring_day": None,
-                "recurring_parent_id": str(template["_id"]),
+                "recurring_parent_id": None,
+                "recurring_id": str(rec["_id"]),
                 "receipt_image": None,
-                "created_at": datetime.utcnow()
-            })
-    
-    if new_transactions:
-        await db.transactions.insert_many(new_transactions)
+                "created_at": now,
+            }
+            for day in dates
+        ])
+        created += len(dates)
+    return created
+
+
+async def process_due_recurring_safely(user_id: str) -> None:
+    try:
+        await process_due_recurring(user_id)
+    except Exception as e:
+        logger.error(f"Error processing recurring payments: {e}")
 
 
 @api_router.get("/transactions", response_model=List[TransactionResponse])
@@ -791,11 +855,8 @@ async def get_transactions(
 ):
     user_id = str(current_user["_id"])
 
-    # Auto-generate missing recurring transactions
-    try:
-        await process_recurring_transactions(user_id)
-    except Exception as e:
-        logger.error(f"Error processing recurring transactions: {e}")
+    # Add payments of recurring transactions that are due
+    await process_due_recurring_safely(user_id)
 
     limit = max(1, min(limit, 200))
     skip = max(0, skip)
@@ -882,76 +943,63 @@ async def delete_transaction(
 
 # ============= STATS ENDPOINTS =============
 
+def month_range(year: int, month: int):
+    start = datetime(year, month, 1)
+    end = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
+    return start, end
+
+
+async def sums_by_type_and_category(match: dict) -> List[dict]:
+    """Totals grouped by type and category, computed by the database (fast even for many transactions)."""
+    return await db.transactions.aggregate([
+        {"$match": match},
+        {"$group": {"_id": {"type": "$type", "category": "$category"}, "total": {"$sum": "$amount"}}},
+    ]).to_list(None)
+
+
 @api_router.get("/transactions/stats/monthly", response_model=MonthlyStats)
 async def get_monthly_stats(
     current_user: dict = Depends(get_current_user),
-    year: Optional[int] = None,
-    month: Optional[int] = None
+    year: Optional[int] = Query(default=None, ge=2000, le=2100),
+    month: Optional[int] = Query(default=None, ge=1, le=12),
 ):
     user_id = str(current_user["_id"])
-    
-    # Auto-generate missing recurring transactions before computing stats
-    try:
-        await process_recurring_transactions(user_id)
-    except Exception as e:
-        logger.error(f"Error processing recurring transactions: {e}")
-    
-    # Default to current month
+    await process_due_recurring_safely(user_id)
+
     if not year or not month:
         now = datetime.utcnow()
-        year = now.year
-        month = now.month
-    
-    # Get start and end of month
-    start_date = datetime(year, month, 1)
-    if month == 12:
-        end_date = datetime(year + 1, 1, 1)
-    else:
-        end_date = datetime(year, month + 1, 1)
-    
-    # Get all transactions for the month (with projection for optimization)
-    monthly_transactions = await db.transactions.find(
-        {
-            "user_id": user_id,
-            "date": {"$gte": start_date, "$lt": end_date}
-        },
-        {"amount": 1, "type": 1, "category": 1, "date": 1}
-    ).to_list(1000)
-    
-    # Calculate monthly totals
-    monthly_income = sum(t["amount"] for t in monthly_transactions if t["type"] == "income")
-    monthly_expenses = sum(t["amount"] for t in monthly_transactions if t["type"] == "expense")
-    
-    # Get ALL transactions for total balance calculation
-    all_transactions = await db.transactions.find(
-        {"user_id": user_id},
-        {"amount": 1, "type": 1}
-    ).to_list(10000)
-    
-    total_income_all = sum(t["amount"] for t in all_transactions if t["type"] == "income")
-    total_expenses_all = sum(t["amount"] for t in all_transactions if t["type"] == "expense")
-    total_balance = total_income_all - total_expenses_all
-    
-    # Group by category (monthly)
-    expenses_by_category = {}
-    for t in monthly_transactions:
-        if t["type"] == "expense":
-            cat = t["category"]
-            expenses_by_category[cat] = expenses_by_category.get(cat, 0) + t["amount"]
-    
-    # Top categories
+        year, month = now.year, now.month
+    start_date, end_date = month_range(year, month)
+
+    monthly = await sums_by_type_and_category({"user_id": user_id, "date": {"$gte": start_date, "$lt": end_date}})
+    all_time = await db.transactions.aggregate([
+        {"$match": {"user_id": user_id}},
+        {"$group": {"_id": "$type", "total": {"$sum": "$amount"}}},
+    ]).to_list(None)
+
+    monthly_income = sum(g["total"] for g in monthly if g["_id"]["type"] == "income")
+    monthly_expenses = sum(g["total"] for g in monthly if g["_id"]["type"] == "expense")
+    totals = {g["_id"]: g["total"] for g in all_time}
+    total_balance = totals.get("income", 0) - totals.get("expense", 0)
+
+    expenses_by_category: Dict[str, float] = {}
+    for g in monthly:
+        if g["_id"]["type"] == "expense":
+            name = g["_id"].get("category") or "Inne"
+            expenses_by_category[name] = round(expenses_by_category.get(name, 0) + g["total"], 2)
+
     top_categories = [
         {"category": cat, "amount": amount}
         for cat, amount in sorted(expenses_by_category.items(), key=lambda x: x[1], reverse=True)[:5]
     ]
-    
+
     return MonthlyStats(
-        total_income=monthly_income,
-        total_expenses=monthly_expenses,
-        balance=total_balance,  # all-time balance from all transactions
-        month_balance=monthly_income - monthly_expenses,
+        total_income=round(monthly_income, 2),
+        total_expenses=round(monthly_expenses, 2),
+        balance=round(total_balance, 2),  # all-time balance from all transactions
+        month_balance=round(monthly_income - monthly_expenses, 2),
         expenses_by_category=expenses_by_category,
-        top_categories=top_categories
+        top_categories=top_categories,
     )
 
 
@@ -1185,79 +1233,618 @@ async def delete_goal(
 
 # ============= BUDGET ENDPOINTS =============
 
+async def budget_to_response(budget: dict, current_user: dict) -> BudgetResponse:
+    user_id = str(current_user["_id"])
+    now = datetime.utcnow()
+    start, end = month_range(now.year, now.month)
+    groups = await sums_by_type_and_category({"user_id": user_id, "type": "expense", "date": {"$gte": start, "$lt": end}})
+    spent_by_category: Dict[str, float] = {}
+    for g in groups:
+        name = g["_id"].get("category") or "Inne"
+        spent_by_category[name] = spent_by_category.get(name, 0) + g["total"]
+    limits = budget.get("category_limits") or {}
+    return BudgetResponse(
+        id=str(budget["_id"]),
+        user_id=user_id,
+        monthly_limit=budget.get("monthly_limit", 0),
+        category_limits=limits,
+        current_month_spending=round(sum(spent_by_category.values()), 2),
+        category_spending={name: round(spent_by_category.get(name, 0), 2) for name in limits},
+        category_limits_active=is_pro_user(current_user),
+    )
+
+
 @api_router.post("/budget", response_model=BudgetResponse)
 async def create_or_update_budget(
     budget: BudgetCreate,
     current_user: dict = Depends(get_current_user)
 ):
     user_id = str(current_user["_id"])
-    
-    # Check if budget exists
-    existing_budget = await db.budgets.find_one({"user_id": user_id})
-    
-    budget_dict = {
-        "user_id": user_id,
-        "monthly_limit": budget.monthly_limit,
-        "category_limits": budget.category_limits or {}
-    }
-    
-    if existing_budget:
-        await db.budgets.update_one(
-            {"user_id": user_id},
-            {"$set": budget_dict}
-        )
-        budget_id = str(existing_budget["_id"])
+    existing = await db.budgets.find_one({"user_id": user_id})
+
+    limits = (existing or {}).get("category_limits") or {}
+    if budget.category_limits is not None:
+        if not is_pro_user(current_user):
+            if budget.category_limits and budget.category_limits != limits:
+                raise HTTPException(status_code=403, detail="Category limits are a Pro feature")
+        else:
+            cleaned = {}
+            for name, value in list(budget.category_limits.items())[:60]:
+                name = (name or "").strip()[:60]
+                if name and value and 0 < value < 100_000_000:
+                    cleaned[name] = round(float(value), 2)
+            limits = cleaned
+
+    doc = {"user_id": user_id, "monthly_limit": budget.monthly_limit, "category_limits": limits}
+    if existing:
+        await db.budgets.update_one({"_id": existing["_id"]}, {"$set": doc})
+        doc["_id"] = existing["_id"]
     else:
-        result = await db.budgets.insert_one(budget_dict)
-        budget_id = str(result.inserted_id)
-    
-    # Calculate current month spending
-    now = datetime.utcnow()
-    start_of_month = datetime(now.year, now.month, 1)
-    
-    transactions = await db.transactions.find({
-        "user_id": user_id,
-        "type": "expense",
-        "date": {"$gte": start_of_month}
-    }).to_list(1000)
-    
-    current_month_spending = sum(t["amount"] for t in transactions)
-    
-    return BudgetResponse(
-        id=budget_id,
-        user_id=user_id,
-        monthly_limit=budget.monthly_limit,
-        category_limits=budget.category_limits or {},
-        current_month_spending=current_month_spending
-    )
+        result = await db.budgets.insert_one(doc)
+        doc["_id"] = result.inserted_id
+    return await budget_to_response(doc, current_user)
 
 
 @api_router.get("/budget", response_model=BudgetResponse)
 async def get_budget(current_user: dict = Depends(get_current_user)):
-    user_id = str(current_user["_id"])
-    budget = await db.budgets.find_one({"user_id": user_id})
-    
+    budget = await db.budgets.find_one({"user_id": str(current_user["_id"])})
     if not budget:
         raise HTTPException(status_code=404, detail="Budget not found")
-    
-    # Calculate current month spending
-    now = datetime.utcnow()
-    start_of_month = datetime(now.year, now.month, 1)
-    
-    transactions = await db.transactions.find({
+    return await budget_to_response(budget, current_user)
+
+
+# ============= RECURRING PAYMENT ENDPOINTS =============
+
+class RecurringCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    amount: float = Field(gt=0, lt=100_000_000)
+    type: Literal["expense", "income"] = "expense"
+    category: str = Field(min_length=1, max_length=60)
+    frequency: Literal["monthly", "weekly", "yearly"] = "monthly"
+    next_date: datetime
+    is_subscription: bool = False
+    # When adding a detected payment: its past transactions get linked to it
+    suggestion_key: Optional[str] = Field(default=None, max_length=120)
+    link_transaction_ids: List[str] = Field(default_factory=list, max_length=60)
+
+
+class RecurringUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    amount: Optional[float] = Field(default=None, gt=0, lt=100_000_000)
+    type: Optional[Literal["expense", "income"]] = None
+    category: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    frequency: Optional[Literal["monthly", "weekly", "yearly"]] = None
+    next_date: Optional[datetime] = None
+    is_subscription: Optional[bool] = None
+    active: Optional[bool] = None
+
+
+class RecurringResponse(BaseModel):
+    id: str
+    name: str
+    amount: float
+    type: str
+    category: str
+    frequency: str
+    next_date: datetime
+    is_subscription: bool
+    active: bool
+    monthly_amount: float
+    created_at: datetime
+
+
+class DismissSuggestionRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=120)
+
+
+def recurring_to_response(r: dict) -> RecurringResponse:
+    frequency = r.get("frequency", "monthly")
+    return RecurringResponse(
+        id=str(r["_id"]),
+        name=r.get("name") or r.get("category", ""),
+        amount=r["amount"],
+        type=r.get("type", "expense"),
+        category=r.get("category", "Inne"),
+        frequency=frequency,
+        next_date=r["next_date"],
+        is_subscription=bool(r.get("is_subscription")),
+        active=bool(r.get("active", True)),
+        monthly_amount=round(insights.monthly_equivalent(r["amount"], frequency), 2),
+        created_at=r.get("created_at") or r["next_date"],
+    )
+
+
+async def ensure_can_add_recurring(current_user: dict) -> None:
+    if is_pro_user(current_user):
+        return
+    count = await db.recurring_payments.count_documents({"user_id": str(current_user["_id"]), "active": True})
+    if count >= FREE_RECURRING_LIMIT:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Free users can have up to {FREE_RECURRING_LIMIT} recurring payments. Upgrade to Pro for unlimited.",
+        )
+
+
+@api_router.get("/recurring")
+async def list_recurring(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    await process_due_recurring_safely(user_id)
+    items = await db.recurring_payments.find({"user_id": user_id}).sort("next_date", 1).to_list(500)
+    responses = [recurring_to_response(r) for r in items]
+    active = [r for r in responses if r.active]
+    expenses = [r for r in active if r.type == "expense"]
+    subscriptions = [r for r in expenses if r.is_subscription]
+    pro = is_pro_user(current_user)
+    return {
+        "items": responses,
+        "summary": {
+            "monthly_expenses": round(sum(r.monthly_amount for r in expenses), 2),
+            "monthly_income": round(sum(r.monthly_amount for r in active if r.type == "income"), 2),
+            "subscriptions_monthly": round(sum(r.monthly_amount for r in subscriptions), 2),
+            "subscriptions_count": len(subscriptions),
+            "yearly_expenses": round(sum(r.monthly_amount for r in expenses) * 12, 2),
+            "active_count": len(active),
+        },
+        "limit": None if pro else FREE_RECURRING_LIMIT,
+        "can_add": pro or len(active) < FREE_RECURRING_LIMIT,
+    }
+
+
+@api_router.post("/recurring", response_model=RecurringResponse)
+async def create_recurring(body: RecurringCreate, current_user: dict = Depends(get_current_user)):
+    await ensure_can_add_recurring(current_user)
+    user_id = str(current_user["_id"])
+    first_day = body.next_date.date()
+    doc = {
         "user_id": user_id,
-        "type": "expense",
-        "date": {"$gte": start_of_month}
-    }).to_list(1000)
-    
-    current_month_spending = sum(t["amount"] for t in transactions)
-    
-    return BudgetResponse(
-        id=str(budget["_id"]),
-        user_id=budget["user_id"],
-        monthly_limit=budget["monthly_limit"],
-        category_limits=budget.get("category_limits", {}),
-        current_month_spending=current_month_spending
+        "name": body.name.strip(),
+        "amount": round(body.amount, 2),
+        "type": body.type,
+        "category": body.category.strip(),
+        "frequency": body.frequency,
+        "anchor_day": first_day.day,
+        "next_date": insights.at_noon(first_day),
+        "is_subscription": body.is_subscription,
+        "active": True,
+        "source": "detected" if body.suggestion_key else "manual",
+        "suggestion_key": body.suggestion_key,
+        "created_at": datetime.utcnow(),
+    }
+    result = await db.recurring_payments.insert_one(doc)
+    doc["_id"] = result.inserted_id
+
+    ids = [ObjectId(i) for i in body.link_transaction_ids if ObjectId.is_valid(i)]
+    if ids:
+        await db.transactions.update_many(
+            {"_id": {"$in": ids}, "user_id": user_id, "recurring_id": None},
+            {"$set": {"recurring_id": str(result.inserted_id)}},
+        )
+    # A payment due today (or earlier) is added straight away
+    await process_due_recurring_safely(user_id)
+    doc = await db.recurring_payments.find_one({"_id": result.inserted_id})
+    return recurring_to_response(doc)
+
+
+@api_router.put("/recurring/{recurring_id}", response_model=RecurringResponse)
+async def update_recurring(recurring_id: str, body: RecurringUpdate, current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    rec_id = to_object_id(recurring_id, "Recurring payment not found")
+    existing = await db.recurring_payments.find_one({"_id": rec_id, "user_id": user_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Recurring payment not found")
+
+    update = {k: v for k, v in body.model_dump().items() if v is not None}
+    if update.get("active") and not existing.get("active", True):
+        await ensure_can_add_recurring(current_user)
+    if "name" in update:
+        update["name"] = update["name"].strip()
+    if "amount" in update:
+        update["amount"] = round(update["amount"], 2)
+    if "next_date" in update:
+        day = update["next_date"].date()
+        update["next_date"] = insights.at_noon(day)
+        update["anchor_day"] = day.day
+    if not update:
+        raise HTTPException(status_code=400, detail="No data to update")
+
+    await db.recurring_payments.update_one({"_id": rec_id}, {"$set": update})
+    await process_due_recurring_safely(user_id)
+    return recurring_to_response(await db.recurring_payments.find_one({"_id": rec_id}))
+
+
+@api_router.delete("/recurring/{recurring_id}")
+async def delete_recurring(recurring_id: str, current_user: dict = Depends(get_current_user)):
+    """Stop a recurring payment. Transactions it already added stay."""
+    result = await db.recurring_payments.delete_one({
+        "_id": to_object_id(recurring_id, "Recurring payment not found"),
+        "user_id": str(current_user["_id"]),
+    })
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Recurring payment not found")
+    return {"status": "deleted"}
+
+
+@api_router.get("/recurring/suggestions")
+async def recurring_suggestions(current_user: dict = Depends(get_current_user)):
+    """Payments that look like subscriptions or bills, found in the user's past transactions."""
+    user_id = str(current_user["_id"])
+    since = datetime.utcnow() - timedelta(days=400)
+    transactions = await db.transactions.find(
+        {"user_id": user_id, "type": "expense", "date": {"$gte": since}, "recurring_id": None, "recurring_parent_id": None},
+        {"date": 1, "amount": 1, "description": 1, "category": 1, "type": 1},
+    ).to_list(None)
+    for t in transactions:
+        t["id"] = str(t["_id"])
+
+    existing = await db.recurring_payments.find({"user_id": user_id}, {"name": 1, "suggestion_key": 1}).to_list(500)
+    known = {insights.merchant_key(r.get("name") or "") for r in existing} | {r["suggestion_key"] for r in existing if r.get("suggestion_key")}
+    dismissed = {d["key"] for d in await db.recurring_dismissed.find({"user_id": user_id}).to_list(500)}
+
+    found = insights.detect_recurring(transactions, datetime.utcnow().date(), known, dismissed)
+    return {"suggestions": found}
+
+
+@api_router.post("/recurring/suggestions/dismiss")
+async def dismiss_suggestion(body: DismissSuggestionRequest, current_user: dict = Depends(get_current_user)):
+    await db.recurring_dismissed.update_one(
+        {"user_id": str(current_user["_id"]), "key": body.key},
+        {"$set": {"user_id": str(current_user["_id"]), "key": body.key, "created_at": datetime.utcnow()}},
+        upsert=True,
+    )
+    return {"status": "ok"}
+
+
+# ============= IMPORT (bank statements and spreadsheets) =============
+#
+# 1. POST /import/preview with the file: the server reads it and answers with the rows it found
+#    (dates, amounts, suggested categories, which ones are already in the app).
+# 2. If the columns weren't recognised, POST /import/remap with the right columns.
+# 3. POST /import/commit with the rows the user left ticked. The file itself is kept for 2 hours only.
+
+class ImportRemapRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=40)
+    mapping: Dict[str, Any]
+
+
+class ImportRowChange(BaseModel):
+    category: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    type: Optional[Literal["expense", "income"]] = None
+
+
+class ImportCommitRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=40)
+    excluded: List[int] = Field(default_factory=list, max_length=importer.MAX_ROWS)
+    changes: Dict[str, ImportRowChange] = Field(default_factory=dict)
+
+
+async def imports_used(user_id: str) -> int:
+    return await db.imports.count_documents({"user_id": user_id})
+
+
+async def can_import(current_user: dict) -> bool:
+    return is_pro_user(current_user) or await imports_used(str(current_user["_id"])) < FREE_IMPORT_LIMIT
+
+
+async def load_import_session(session_id: str, user_id: str) -> dict:
+    session = await db.import_sessions.find_one({"_id": to_object_id(session_id, "Import session expired"), "user_id": user_id})
+    if not session:
+        raise HTTPException(status_code=404, detail="Import session expired")
+    return session
+
+
+async def import_rows(session: dict, user_id: str):
+    """Rows of the stored file with suggested categories and duplicate marks."""
+    table = session["table"]
+    width = max((len(r) for r in table), default=0)
+    mapping = importer.Mapping.from_dict(session.get("mapping") or {}, width)
+    parsed = importer.parse_file(b"", session.get("file_name", ""), mapping=mapping, table=table, header_row=session.get("header_row"))
+    categories = await db.categories.find({"user_id": user_id}, {"name": 1, "type": 1, "is_default": 1}).to_list(300)
+    importer.refine_assumed_types(parsed.result, categories)
+
+    extracted = parsed.result.rows
+    hashes = importer.hashes_for(extracted)
+    rows = []
+    for i, (r, h) in enumerate(zip(extracted, hashes)):
+        rows.append({
+            "i": i,
+            "date": r.date.isoformat(),
+            "amount": r.amount,
+            "type": r.type,
+            "description": r.description,
+            "category": importer.suggest_category(r.description, r.type, r.category_hint, categories),
+            "hash": h,
+            "duplicate": None,
+        })
+
+    if rows:
+        first = min(r.date for r in extracted) - timedelta(days=1)
+        last = max(r.date for r in extracted) + timedelta(days=2)
+        existing = await db.transactions.find(
+            {"user_id": user_id, "date": {"$gte": datetime.combine(first, dtime.min), "$lt": datetime.combine(last, dtime.min)}},
+            {"date": 1, "amount": 1, "type": 1, "import_hash": 1},
+        ).to_list(None)
+        known_hashes = {e["import_hash"] for e in existing if e.get("import_hash")}
+        # Transactions typed in by hand: same amount and type within a day may be the same payment
+        pool = Counter(
+            (e["date"].date(), round(e["amount"], 2), e["type"]) for e in existing if not e.get("import_hash")
+        )
+        for row in rows:
+            if row["hash"] in known_hashes:
+                row["duplicate"] = "exact"
+                continue
+            day = date.fromisoformat(row["date"])
+            for delta in (0, -1, 1):
+                key = (day + timedelta(days=delta), round(row["amount"], 2), row["type"])
+                if pool[key] > 0:
+                    pool[key] -= 1
+                    row["duplicate"] = "possible"
+                    break
+    return parsed, rows, categories
+
+
+async def import_preview_response(session: dict, current_user: dict) -> dict:
+    user_id = str(current_user["_id"])
+    parsed, rows, _ = await import_rows(session, user_id)
+    fresh = [r for r in rows if r["duplicate"] != "exact"]
+    expenses = [r for r in fresh if r["type"] == "expense"]
+    incomes = [r for r in fresh if r["type"] == "income"]
+    dates = [r["date"] for r in rows]
+    used = await imports_used(user_id)
+    pro = is_pro_user(current_user)
+    return {
+        "session_id": str(session["_id"]),
+        "file_name": session.get("file_name", ""),
+        "source": session.get("source", "CSV"),
+        "columns": parsed.columns[:30],
+        "sample": parsed.sample(5),
+        "mapping": parsed.mapping.as_dict(),
+        "header_found": parsed.header_row is not None,
+        "rows": [{k: v for k, v in r.items() if k != "hash"} for r in rows],
+        "summary": {
+            "count": len(fresh),
+            "expenses_count": len(expenses),
+            "expenses_total": round(sum(r["amount"] for r in expenses), 2),
+            "income_count": len(incomes),
+            "income_total": round(sum(r["amount"] for r in incomes), 2),
+            "date_from": min(dates) if dates else None,
+            "date_to": max(dates) if dates else None,
+            "duplicates_exact": sum(1 for r in rows if r["duplicate"] == "exact"),
+            "duplicates_possible": sum(1 for r in rows if r["duplicate"] == "possible"),
+        },
+        "skipped": parsed.result.skipped,
+        "foreign_currency": parsed.result.foreign_currency,
+        "assumed_expenses": parsed.result.assumed_expenses,
+        "can_commit": pro or used < FREE_IMPORT_LIMIT,
+        "imports_used": used,
+        "import_limit": None if pro else FREE_IMPORT_LIMIT,
+    }
+
+
+@api_router.post("/import/preview")
+async def import_preview(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
+    content = await file.read(importer.MAX_FILE_BYTES + 1)
+    file_name = (file.filename or "plik")[:120]
+    try:
+        parsed = await run_in_threadpool(importer.parse_file, content, file_name)
+    except importer.ImportFileError as e:
+        raise HTTPException(status_code=400, detail=f"Import error: {e.code}")
+    except Exception as e:
+        logger.error(f"Could not read import file: {e}")
+        raise HTTPException(status_code=400, detail="Import error: unreadable")
+
+    table = [[cell[:500] for cell in row[:40]] for row in parsed.table]
+    mapping = parsed.mapping.as_dict()
+    mapping.update({"currency": parsed.mapping.currency, "status": parsed.mapping.status})
+    session = {
+        "user_id": str(current_user["_id"]),
+        "created_at": datetime.utcnow(),
+        "file_name": file_name,
+        "source": parsed.source,
+        "table": table,
+        "header_row": parsed.header_row,
+        "mapping": mapping,
+    }
+    result = await db.import_sessions.insert_one(session)
+    session["_id"] = result.inserted_id
+    return await import_preview_response(session, current_user)
+
+
+@api_router.post("/import/remap")
+async def import_remap(body: ImportRemapRequest, current_user: dict = Depends(get_current_user)):
+    """The user pointed out which columns hold the date, amount and description."""
+    session = await load_import_session(body.session_id, str(current_user["_id"]))
+    width = max((len(r) for r in session["table"]), default=0)
+    chosen = importer.Mapping.from_dict(body.mapping, width)
+    if not chosen.usable():
+        raise HTTPException(status_code=400, detail="Import error: mapping")
+    mapping = chosen.as_dict()
+    old = session.get("mapping") or {}
+    mapping.update({"currency": old.get("currency"), "status": old.get("status")})
+    header_row = session.get("header_row")
+    if body.mapping.get("first_row_is_header") is not None:
+        header_row = 0 if body.mapping.get("first_row_is_header") else None
+    await db.import_sessions.update_one({"_id": session["_id"]}, {"$set": {"mapping": mapping, "header_row": header_row}})
+    session.update({"mapping": mapping, "header_row": header_row})
+    return await import_preview_response(session, current_user)
+
+
+@api_router.post("/import/commit")
+async def import_commit(body: ImportCommitRequest, current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    session = await load_import_session(body.session_id, user_id)
+    if not await can_import(current_user):
+        raise HTTPException(status_code=403, detail=f"Free users can import {FREE_IMPORT_LIMIT} file. Upgrade to Pro for unlimited imports.")
+
+    _, rows, categories = await import_rows(session, user_id)
+    names = {
+        "expense": {c["name"] for c in categories if (c.get("type") or "expense") == "expense"},
+        "income": {c["name"] for c in categories if c.get("type") == "income"},
+    }
+    excluded = set(body.excluded)
+    chosen = []
+    for row in rows:
+        if row["i"] in excluded or row["duplicate"] == "exact":
+            continue
+        change = body.changes.get(str(row["i"]))
+        if change:
+            if change.type:
+                row["type"] = change.type
+            if change.category and change.category in names[row["type"]]:
+                row["category"] = change.category
+        if row["category"] not in names[row["type"]]:
+            row["category"] = importer.suggest_category(row["description"], row["type"], "", categories)
+        chosen.append(row)
+    if not chosen:
+        raise HTTPException(status_code=400, detail="Nothing to import")
+
+    now = datetime.utcnow()
+    dates = [r["date"] for r in chosen]
+    import_doc = {
+        "user_id": user_id,
+        "created_at": now,
+        "file_name": session.get("file_name", ""),
+        "source": session.get("source", "CSV"),
+        "count": len(chosen),
+        "date_from": min(dates),
+        "date_to": max(dates),
+        "expenses_total": round(sum(r["amount"] for r in chosen if r["type"] == "expense"), 2),
+        "income_total": round(sum(r["amount"] for r in chosen if r["type"] == "income"), 2),
+    }
+    result = await db.imports.insert_one(import_doc)
+    import_id = str(result.inserted_id)
+
+    docs = [
+        {
+            "user_id": user_id,
+            "amount": r["amount"],
+            "type": r["type"],
+            "category": r["category"],
+            "description": r["description"],
+            "date": insights.at_noon(date.fromisoformat(r["date"])),
+            "is_recurring": False,
+            "recurring_day": None,
+            "recurring_parent_id": None,
+            "receipt_image": None,
+            "import_id": import_id,
+            "import_hash": r["hash"],
+            "created_at": now,
+        }
+        for r in chosen
+    ]
+    for start in range(0, len(docs), 1000):
+        await db.transactions.insert_many(docs[start:start + 1000])
+    await db.import_sessions.delete_one({"_id": session["_id"]})
+    logger.info(f"User {user_id} imported {len(docs)} transactions ({import_doc['source']})")
+    return {"imported": len(docs), "import_id": import_id}
+
+
+@api_router.get("/import/history")
+async def import_history(current_user: dict = Depends(get_current_user)):
+    user_id = str(current_user["_id"])
+    items = await db.imports.find({"user_id": user_id}).sort("created_at", -1).to_list(50)
+    pro = is_pro_user(current_user)
+    return {
+        "imports": [
+            {
+                "id": str(i["_id"]),
+                "created_at": i["created_at"],
+                "file_name": i.get("file_name", ""),
+                "source": i.get("source", ""),
+                "count": i.get("count", 0),
+                "date_from": i.get("date_from"),
+                "date_to": i.get("date_to"),
+            }
+            for i in items
+        ],
+        "imports_used": len(items),
+        "limit": None if pro else FREE_IMPORT_LIMIT,
+        "can_import": pro or len(items) < FREE_IMPORT_LIMIT,
+    }
+
+
+@api_router.delete("/import/{import_id}")
+async def undo_import(import_id: str, current_user: dict = Depends(get_current_user)):
+    """Remove everything one import added (e.g. the wrong file was chosen)."""
+    user_id = str(current_user["_id"])
+    imp = await db.imports.find_one({"_id": to_object_id(import_id, "Import not found"), "user_id": user_id})
+    if not imp:
+        raise HTTPException(status_code=404, detail="Import not found")
+    removed = await db.transactions.delete_many({"user_id": user_id, "import_id": import_id})
+    await db.imports.delete_one({"_id": imp["_id"]})
+    return {"status": "deleted", "removed": removed.deleted_count}
+
+
+# ============= MONTHLY SUMMARY =============
+
+REPORT_FIELDS = {"date": 1, "amount": 1, "type": 1, "category": 1, "description": 1}
+
+
+@api_router.get("/reports/monthly")
+async def monthly_report(
+    current_user: dict = Depends(get_current_user),
+    year: Optional[int] = Query(default=None, ge=2000, le=2100),
+    month: Optional[int] = Query(default=None, ge=1, le=12),
+):
+    """Summary of one month with comparisons and plain-language conclusions.
+
+    Free plan: totals, categories and the first conclusion. Pro: everything.
+    """
+    user_id = str(current_user["_id"])
+    await process_due_recurring_safely(user_id)
+    today = datetime.utcnow().date()
+    if not year or not month:
+        year, month = today.year, today.month
+    start, end = month_range(year, month)
+    prev_start, _ = month_range(year - 1, 12) if month == 1 else month_range(year, month - 1)
+
+    current = await db.transactions.find({"user_id": user_id, "date": {"$gte": start, "$lt": end}}, REPORT_FIELDS).to_list(None)
+    previous = await db.transactions.find({"user_id": user_id, "date": {"$gte": prev_start, "$lt": start}}, REPORT_FIELDS).to_list(None)
+    budget = await db.budgets.find_one({"user_id": user_id})
+    recurring = await db.recurring_payments.find({"user_id": user_id, "active": True}).to_list(500)
+
+    return insights.build_monthly_report(
+        year, month, current, previous, today,
+        budget=budget, recurring=recurring, is_pro=is_pro_user(current_user),
+    )
+
+
+# ============= EXPORT (Pro) =============
+
+EXPORT_TOKEN_MINUTES = 10
+
+
+@api_router.post("/export/link")
+async def export_link(request: Request, current_user: dict = Depends(get_current_user)):
+    """A short-lived link the phone can open in the browser to download the Excel file."""
+    if not is_pro_user(current_user):
+        raise HTTPException(status_code=403, detail="Export is a Pro feature")
+    now = datetime.utcnow()
+    token = jwt.encode(
+        {"user_id": str(current_user["_id"]), "purpose": "export", "iat": _utc_timestamp(now),
+         "exp": now + timedelta(minutes=EXPORT_TOKEN_MINUTES)},
+        SECRET_KEY, algorithm=ALGORITHM,
+    )
+    return {"url": f"{public_base_url(request)}/api/export/download?token={token}"}
+
+
+@api_router.get("/export/download")
+async def export_download(token: str = Query(min_length=10, max_length=2000)):
+    payload = verify_token(token)
+    if payload.get("purpose") != "export" or not ObjectId.is_valid(payload.get("user_id", "")):
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user = await db.users.find_one({"_id": ObjectId(payload["user_id"])})
+    if not user or not is_pro_user(user):
+        raise HTTPException(status_code=403, detail="Export is a Pro feature")
+
+    transactions = await db.transactions.find(
+        {"user_id": str(user["_id"])}, {"date": 1, "amount": 1, "type": 1, "category": 1, "description": 1}
+    ).to_list(None)
+    content = await run_in_threadpool(exporter.build_workbook, transactions, user.get("name", ""))
+    file_name = f"cashflo-transakcje-{datetime.utcnow().strftime('%Y-%m-%d')}.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"', "Cache-Control": "no-store"},
     )
 
 
@@ -1749,10 +2336,7 @@ async def admin_delete_user(
     await cancel_stripe_subscription(user)
 
     # Cascade delete
-    await db.transactions.delete_many({"user_id": user_id})
-    await db.goals.delete_many({"user_id": user_id})
-    await db.budgets.delete_many({"user_id": user_id})
-    await db.categories.delete_many({"user_id": user_id})
+    await delete_user_data(user_id)
     await db.payment_transactions.delete_many({"user_id": user_id})
     await db.users.delete_one({"_id": to_object_id(user_id, "User not found")})
     
@@ -1876,6 +2460,23 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def create_indexes():
+    """Indexes keep lists and summaries fast as people import thousands of transactions."""
+    try:
+        await db.transactions.create_index([("user_id", 1), ("date", -1)])
+        await db.transactions.create_index([("user_id", 1), ("import_id", 1)], sparse=True)
+        await db.transactions.create_index([("user_id", 1), ("recurring_id", 1)])
+        await db.recurring_payments.create_index([("user_id", 1), ("active", 1), ("next_date", 1)])
+        await db.imports.create_index([("user_id", 1), ("created_at", -1)])
+        await db.import_sessions.create_index("created_at", expireAfterSeconds=2 * 3600)
+        await db.recurring_dismissed.create_index([("user_id", 1), ("key", 1)])
+        await db.categories.create_index("user_id")
+        await db.goals.create_index("user_id")
+    except Exception as e:
+        logger.error(f"Could not create database indexes: {e}")
+
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

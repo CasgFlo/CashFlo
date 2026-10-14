@@ -9,19 +9,19 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "description": "CashFlo - Inteligentne zarządzanie finansami osobistymi. Śledź wydatki, ustaw budżet i osiągaj cele oszczędnościowe.",
-    "primaryColor": "#2F5B4C",
+    "primaryColor": "#0F6B54",
     "splash": {
       "image": "./assets/images/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#F5F1EA"
+      "backgroundColor": "#F4F6F5"
     },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "cash.cashflo.mobile",
       "buildNumber": "1",
       "infoPlist": {
-        "NSCameraUsageDescription": "Skanuj paragony aby śledzić wydatki",
-        "NSPhotoLibraryUsageDescription": "Dodawaj zdjęcia paragonów z galerii",
+        "NSCameraUsageDescription": "Rób zdjęcia paragonów, aby dołączać je do wydatków",
+        "NSPhotoLibraryUsageDescription": "Wybieraj zdjęcia paragonów z galerii, aby dołączać je do wydatków",
         "ITSAppUsesNonExemptEncryption": false
       },
       "associatedDomains": [
@@ -32,12 +32,10 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#F5F1EA"
+        "backgroundColor": "#F4F6F5"
       },
       "permissions": [
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "CAMERA"
       ],
       "package": "cash.cashflo.mobile",
       "versionCode": 1,
@@ -61,6 +59,10 @@
             "DEFAULT"
           ]
         }
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
     },
     "web": {
@@ -70,8 +72,8 @@
       "name": "CashFlo - Zarządzanie Finansami",
       "shortName": "CashFlo",
       "lang": "pl",
-      "themeColor": "#2F5B4C",
-      "backgroundColor": "#F5F1EA",
+      "themeColor": "#0F6B54",
+      "backgroundColor": "#F4F6F5",
       "description": "CashFlo - Inteligentne zarządzanie finansami osobistymi. Śledź wydatki, ustaw budżet i osiągaj cele oszczędnościowe.",
       "display": "standalone",
       "orientation": "portrait"
@@ -84,14 +86,14 @@
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#F5F1EA"
+          "backgroundColor": "#F4F6F5"
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Wybierz zdjęcie paragonu z galerii",
-          "cameraPermission": "Zrób zdjęcie paragonu kamerą"
+          "photosPermission": "Wybieraj zdjęcia paragonów z galerii, aby dołączać je do wydatków",
+          "cameraPermission": "Rób zdjęcia paragonów, aby dołączać je do wydatków"
         }
       ],
       "@react-native-community/datetimepicker",

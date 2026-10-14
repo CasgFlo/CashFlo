@@ -63,19 +63,27 @@ ${message}
   const faqItems = [
     {
       question: 'Jak dodać transakcję?',
-      answer: 'Na ekranie głównym lub w zakładce Transakcje kliknij przycisk + i wypełnij formularz.',
+      answer: 'Na ekranie głównym lub w zakładce Transakcje kliknij przycisk + i wpisz kwotę.',
+    },
+    {
+      question: 'Jak poprawić albo usunąć transakcję?',
+      answer: 'Kliknij transakcję na liście. Otworzy się edycja, a ikona kosza w prawym górnym rogu ją usuwa.',
     },
     {
       question: 'Jak ustawić cel oszczędnościowy?',
-      answer: 'Przejdź do zakładki Cele i kliknij przycisk + aby utworzyć nowy cel.',
+      answer: 'Przejdź do zakładki Cele i kliknij przycisk +, aby utworzyć nowy cel.',
     },
     {
       question: 'Jak zmienić budżet miesięczny?',
-      answer: 'W zakładce Więcej wybierz opcję Budżet i ustaw nowy limit.',
+      answer: 'W zakładce Więcej wybierz Budżet miesięczny i ustaw nowy limit.',
+    },
+    {
+      question: 'Nie pamiętam hasła. Co zrobić?',
+      answer: 'Na ekranie logowania kliknij „Nie pamiętasz hasła?”. Wyślemy Ci kod do ustawienia nowego hasła.',
     },
     {
       question: 'Jak anulować subskrypcję Pro?',
-      answer: 'Napisz do nas na cashflo2026@gmail.com, a pomożemy Ci anulować subskrypcję.',
+      answer: 'W zakładce Więcej wybierz Zarządzaj subskrypcją. Pro działa do końca opłaconego okresu. W razie problemów napisz na cashflo2026@gmail.com.',
     },
   ];
 

@@ -4,192 +4,121 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  StyleSheet,
   KeyboardAvoidingView,
   Platform,
-  Alert,
-  ActivityIndicator,
   ScrollView,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useAuth } from '../../contexts/AuthContext';
-import { Colors } from '../../utils/colors';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '../../contexts/AuthContext';
+import { useTheme } from '../../contexts/ThemeContext';
+import { Button, space } from '../../components/ui';
+import { AuthBrand, createAuthStyles } from '../../components/auth';
 
 export default function LoginScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { login } = useAuth();
+  const { colors } = useTheme();
+  const styles = createAuthStyles(colors);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert('Błąd', 'Wypełnij wszystkie pola');
+    if (!email.trim() || !password) {
+      setError('Wpisz e-mail i hasło.');
       return;
     }
-
+    setError(null);
     setLoading(true);
     try {
-      await login(email.toLowerCase().trim(), password);
+      await login(email, password);
       router.replace('/(tabs)');
-    } catch (error: any) {
-      Alert.alert('Błąd logowania', error.message);
+    } catch (e: any) {
+      setError(e.message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
+    <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + space.xxl, paddingBottom: insets.bottom + space.xl }]}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={styles.header}>
-          <Ionicons name="wallet" size={60} color={Colors.primary} />
-          <Text style={styles.title}>CashFlo</Text>
-          <Text style={styles.subtitle}>Zarządzaj swoimi finansami</Text>
+        <AuthBrand colors={colors} />
+        <Text style={styles.title}>Witaj ponownie</Text>
+        <Text style={styles.subtitle}>Zaloguj się, żeby zobaczyć swoje finanse.</Text>
+
+        <Text style={styles.label}>E-mail</Text>
+        <View style={styles.inputBox}>
+          <Ionicons name="mail-outline" size={20} color={colors.textSecondary} />
+          <TextInput
+            style={styles.input}
+            placeholder="ty@przyklad.pl"
+            value={email}
+            onChangeText={(t) => {
+              setEmail(t);
+              setError(null);
+            }}
+            autoCapitalize="none"
+            keyboardType="email-address"
+            autoComplete="email"
+            textContentType="emailAddress"
+            placeholderTextColor={colors.textLight}
+          />
         </View>
 
-        <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Ionicons name="mail-outline" size={20} color={Colors.textSecondary} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Email"
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              autoComplete="email"
-              placeholderTextColor={Colors.textLight}
-            />
-          </View>
-
-          <View style={styles.inputContainer}>
-            <Ionicons name="lock-closed-outline" size={20} color={Colors.textSecondary} style={styles.inputIcon} />
-            <TextInput
-              style={[styles.input, { flex: 1 }]}
-              placeholder="Hasło"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-              autoComplete="password"
-              placeholderTextColor={Colors.textLight}
-            />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-              <Ionicons
-                name={showPassword ? 'eye-outline' : 'eye-off-outline'}
-                size={20}
-                color={Colors.textSecondary}
-              />
-            </TouchableOpacity>
-          </View>
-
+        <Text style={styles.label}>Hasło</Text>
+        <View style={styles.inputBox}>
+          <Ionicons name="lock-closed-outline" size={20} color={colors.textSecondary} />
+          <TextInput
+            style={styles.input}
+            placeholder="Twoje hasło"
+            value={password}
+            onChangeText={(t) => {
+              setPassword(t);
+              setError(null);
+            }}
+            secureTextEntry={!showPassword}
+            autoComplete="password"
+            textContentType="password"
+            onSubmitEditing={handleLogin}
+            placeholderTextColor={colors.textLight}
+          />
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleLogin}
-            disabled={loading}
+            onPress={() => setShowPassword(!showPassword)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            accessibilityLabel={showPassword ? 'Ukryj hasło' : 'Pokaż hasło'}
           >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Zaloguj się</Text>
-            )}
+            <Ionicons name={showPassword ? 'eye-outline' : 'eye-off-outline'} size={20} color={colors.textSecondary} />
           </TouchableOpacity>
+        </View>
 
-          <View style={styles.footer}>
-            <Text style={styles.footerText}>Nie masz konta? </Text>
-            <TouchableOpacity onPress={() => router.push('/auth/register')}>
-              <Text style={styles.link}>Zarejestruj się</Text>
-            </TouchableOpacity>
-          </View>
+        <TouchableOpacity
+          onPress={() => router.push({ pathname: '/auth/forgot', params: { email } })}
+          style={styles.forgot}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.link}>Nie pamiętasz hasła?</Text>
+        </TouchableOpacity>
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+
+        <Button title="Zaloguj się" onPress={handleLogin} loading={loading} style={{ marginTop: space.lg }} />
+
+        <View style={styles.footer}>
+          <Text style={styles.footerText}>Nie masz konta? </Text>
+          <TouchableOpacity onPress={() => router.push('/auth/register')}>
+            <Text style={styles.link}>Załóż konto</Text>
+          </TouchableOpacity>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: Colors.background,
-  },
-  scrollContent: {
-    flexGrow: 1,
-    justifyContent: 'center',
-    padding: 24,
-  },
-  header: {
-    alignItems: 'center',
-    marginBottom: 48,
-  },
-  title: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: Colors.primary,
-    marginTop: 16,
-  },
-  subtitle: {
-    fontSize: 16,
-    color: Colors.textSecondary,
-    marginTop: 8,
-  },
-  form: {
-    width: '100%',
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    paddingVertical: 4,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: Colors.border,
-  },
-  inputIcon: {
-    marginRight: 12,
-  },
-  input: {
-    flex: 1,
-    fontSize: 16,
-    color: Colors.text,
-    paddingVertical: 12,
-  },
-  button: {
-    backgroundColor: Colors.primary,
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginTop: 24,
-  },
-  footerText: {
-    color: Colors.textSecondary,
-    fontSize: 14,
-  },
-  link: {
-    color: Colors.primary,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-});

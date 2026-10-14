@@ -24,6 +24,5 @@ numpy>=1.26.0
 python-multipart>=0.0.9
 jq>=1.6.0
 typer>=0.9.0
-# emergentintegrations (Stripe helper) is only installable on the Emergent platform.
-# Outside Emergent the server runs without it and the payment endpoints answer 503
-# until payments are rewritten. On Emergent, install it with: pip install emergentintegrations
+# Official Stripe library (pinned below 13: the payment code reads Stripe objects dict-style)
+stripe>=11,<13

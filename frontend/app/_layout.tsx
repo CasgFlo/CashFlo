@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Platform } from 'react-native';
-import { Stack } from 'expo-router';
-import { AuthProvider } from '../contexts/AuthContext';
-import { ThemeProvider } from '../contexts/ThemeContext';
+import { Stack, useRouter, useSegments } from 'expo-router';
+import { StatusBar } from 'expo-status-bar';
+import { AuthProvider, useAuth } from '../contexts/AuthContext';
+import { ThemeProvider, useTheme } from '../contexts/ThemeContext';
 import { RootSiblingParent } from 'react-native-root-siblings';
 
 // Inject desktop frame CSS once at module load (web only).
@@ -47,7 +48,7 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
 
       @media (min-width: 600px) {
         html, body {
-          background: #E8E4DC !important;
+          background: #E4E9E6 !important;
         }
         #root {
           position: absolute !important;
@@ -60,7 +61,7 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
           max-width: 480px !important;
           box-shadow: 0 10px 40px rgba(0, 0, 0, 0.18) !important;
           overflow: hidden !important;
-          background: #F5F5F5;
+          background: #F4F6F5;
         }
         #root > div {
           position: relative !important;
@@ -86,17 +87,54 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
   }
 }
 
+// Screens anyone can open without signing in
+const PUBLIC_ROUTES = ['auth', 'terms', 'privacy', 'legal', 'home'];
+
+/** Sends signed-out users (e.g. after their session expired) back to the login screen. */
+function AuthGate() {
+  const { isAuthenticated, loading } = useAuth();
+  const segments = useSegments() as string[];
+  const router = useRouter();
+
+  useEffect(() => {
+    if (loading) return;
+    const first = segments[0];
+    const onPublicScreen = !first || PUBLIC_ROUTES.includes(first);
+    if (!isAuthenticated && !onPublicScreen) {
+      router.replace('/auth/login');
+    }
+  }, [isAuthenticated, loading, segments]);
+
+  return null;
+}
+
+function ThemedStack() {
+  const { colors, isDark } = useTheme();
+  return (
+    <>
+      <StatusBar style={isDark ? 'light' : 'dark'} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: colors.background },
+        }}
+      >
+        <Stack.Screen name="index" />
+        <Stack.Screen name="auth/login" />
+        <Stack.Screen name="auth/register" />
+        <Stack.Screen name="(tabs)" />
+      </Stack>
+    </>
+  );
+}
+
 export default function RootLayout() {
   return (
     <ThemeProvider>
       <AuthProvider>
         <RootSiblingParent>
-          <Stack screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="auth/login" />
-            <Stack.Screen name="auth/register" />
-            <Stack.Screen name="(tabs)" />
-          </Stack>
+          <AuthGate />
+          <ThemedStack />
         </RootSiblingParent>
       </AuthProvider>
     </ThemeProvider>

@@ -1,364 +1,241 @@
-import React, { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  RefreshControl,
-  ActivityIndicator,
-  Dimensions,
-} from 'react-native';
+import React, { useState, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '../../contexts/ThemeContext';
-import api from '../../utils/api';
-import { MonthlyStats } from '../../utils/types';
 import { PieChart } from 'react-native-gifted-charts';
-
-const screenWidth = Dimensions.get('window').width;
+import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
+import api from '../../utils/api';
+import { MonthlyStats, Category } from '../../utils/types';
+import { formatCurrency, formatMonthLabel } from '../../utils/format';
+import { makeCategoryLookup, categoryColor } from '../../utils/categories';
+import { LargeTitle, Card, ProgressBar, EmptyState, tabular, space, radius } from '../../components/ui';
 
 export default function StatsScreen() {
-  const { colors, isDark } = useTheme();
+  const { colors } = useTheme();
   const insets = useSafeAreaInsets();
+  const now = new Date();
+  const [period, setPeriod] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [stats, setStats] = useState<MonthlyStats | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
 
-  const styles = createStyles(colors, isDark);
+  const styles = createStyles(colors);
+  const lookup = useMemo(() => makeCategoryLookup(categories), [categories]);
+  const isCurrentMonth = period.year === now.getFullYear() && period.month === now.getMonth() + 1;
 
-  useFocusEffect(
-    useCallback(() => {
-      loadStats();
-    }, [])
-  );
-
-  const loadStats = async () => {
+  const loadStats = async (year: number, month: number) => {
     try {
-      const response = await api.get('/transactions/stats/monthly');
-      setStats(response.data);
-    } catch (error: any) {
+      const [statsRes, categoriesRes] = await Promise.all([
+        api.get(`/transactions/stats/monthly?year=${year}&month=${month}`),
+        api.get('/categories'),
+      ]);
+      setStats(statsRes.data);
+      setCategories(categoriesRes.data);
+      setLoadError(false);
+    } catch (error) {
       console.error('Error loading stats:', error);
+      setLoadError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadStats();
+  useFocusEffect(
+    useCallback(() => {
+      loadStats(period.year, period.month);
+    }, [period.year, period.month])
+  );
+
+  const shiftMonth = (delta: number) => {
+    let month = period.month + delta;
+    let year = period.year;
+    if (month < 1) {
+      month = 12;
+      year -= 1;
+    } else if (month > 12) {
+      month = 1;
+      year += 1;
+    }
+    setLoading(true);
+    setPeriod({ year, month });
   };
 
-  const formatCurrency = (amount: number) => {
-    return `${amount.toFixed(2)} zł`;
-  };
+  const income = stats?.total_income || 0;
+  const expenses = stats?.total_expenses || 0;
+  const monthBalance = stats?.month_balance ?? income - expenses;
 
-  const getCategoryColors = () => {
-    return ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#FF7F50', '#6C5CE7', '#95A5A6'];
-  };
-
-  const getPieData = () => {
-    if (!stats || Object.keys(stats.expenses_by_category).length === 0) return [];
-    const chartColors = getCategoryColors();
-    return Object.entries(stats.expenses_by_category).map(([category, amount], index) => ({
-      value: amount,
-      label: category,
-      color: chartColors[index % chartColors.length],
+  const spending = Object.entries(stats?.expenses_by_category || {})
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, amount], index) => ({
+      name,
+      amount,
+      share: expenses > 0 ? amount / expenses : 0,
+      color: categoryColor(lookup, name, index),
+      icon: (lookup(name, 'expense')?.icon || 'ellipse') as React.ComponentProps<typeof Ionicons>['name'],
     }));
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  const pieData = getPieData();
 
   return (
     <ScrollView
-      style={styles.container}
-      contentContainerStyle={[styles.contentContainer, { paddingBottom: insets.bottom + 20 }]}
+      style={styles.screen}
+      contentContainerStyle={[styles.content, { paddingTop: insets.top + space.sm }]}
       refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            setRefreshing(true);
+            loadStats(period.year, period.month);
+          }}
+          tintColor={colors.primary}
+          colors={[colors.primary]}
+        />
       }
     >
-      {/* Summary Cards */}
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCardIncome}>
-          <Ionicons name="arrow-down-circle" size={36} color={isDark ? '#66BB6A' : colors.income} />
-          <Text style={styles.summaryLabel}>Przychody</Text>
-          <Text style={[styles.summaryAmount, { color: isDark ? '#66BB6A' : colors.income }]}>
-            {formatCurrency(stats?.total_income || 0)}
-          </Text>
-        </View>
-        <View style={styles.summaryCardExpense}>
-          <Ionicons name="arrow-up-circle" size={36} color={isDark ? '#EF5350' : colors.expense} />
-          <Text style={styles.summaryLabel}>Wydatki</Text>
-          <Text style={[styles.summaryAmount, { color: isDark ? '#EF5350' : colors.expense }]}>
-            {formatCurrency(stats?.total_expenses || 0)}
-          </Text>
-        </View>
-      </View>
+      <LargeTitle title="Statystyki" />
 
-      {/* Balance Card */}
-      <View style={styles.balanceCard}>
-        <Text style={styles.balanceLabel}>Bilans miesięczny</Text>
-        <Text
-          style={[
-            styles.balanceAmount,
-            { color: (stats?.balance || 0) >= 0 ? (isDark ? '#66BB6A' : colors.income) : (isDark ? '#EF5350' : colors.expense) },
-          ]}
+      {/* Month switcher */}
+      <View style={styles.monthSwitcher}>
+        <TouchableOpacity style={styles.monthButton} onPress={() => shiftMonth(-1)} accessibilityLabel="Poprzedni miesiąc">
+          <Ionicons name="chevron-back" size={20} color={colors.text} />
+        </TouchableOpacity>
+        <Text style={styles.monthLabel}>{formatMonthLabel(period.year, period.month)}</Text>
+        <TouchableOpacity
+          style={[styles.monthButton, isCurrentMonth && { opacity: 0.35 }]}
+          onPress={() => shiftMonth(1)}
+          disabled={isCurrentMonth}
+          accessibilityLabel="Następny miesiąc"
         >
-          {(stats?.balance || 0) >= 0 ? '+' : ''}{formatCurrency(stats?.balance || 0)}
-        </Text>
+          <Ionicons name="chevron-forward" size={20} color={colors.text} />
+        </TouchableOpacity>
       </View>
 
-      {/* Pie Chart */}
-      {pieData.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Wydatki wg kategorii</Text>
-          <View style={styles.chartContainer}>
-            <PieChart
-              data={pieData}
-              radius={100}
-              donut
-              innerRadius={65}
-              innerCircleColor={colors.surface}
-              centerLabelComponent={() => (
-                <View style={styles.centerLabel}>
-                  <Text style={styles.centerLabelAmount}>
-                    {formatCurrency(stats?.total_expenses || 0)}
-                  </Text>
-                  <Text style={styles.centerLabelText}>Wydatki</Text>
-                </View>
-              )}
-            />
+      {loading ? (
+        <ActivityIndicator style={{ marginTop: space.xxl }} color={colors.primary} />
+      ) : loadError ? (
+        <EmptyState icon="cloud-offline-outline" title="Nie udało się pobrać statystyk" text="Przeciągnij w dół, aby spróbować ponownie." />
+      ) : (
+        <>
+          {/* Summary */}
+          <View style={styles.summaryRow}>
+            <Card style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Przychody</Text>
+              <Text style={[styles.summaryValue, tabular, { color: colors.income }]} numberOfLines={1} adjustsFontSizeToFit>
+                {formatCurrency(income)}
+              </Text>
+            </Card>
+            <Card style={styles.summaryCard}>
+              <Text style={styles.summaryLabel}>Wydatki</Text>
+              <Text style={[styles.summaryValue, tabular, { color: colors.expense }]} numberOfLines={1} adjustsFontSizeToFit>
+                {formatCurrency(expenses)}
+              </Text>
+            </Card>
           </View>
-
-          {/* Legend */}
-          <View style={styles.legend}>
-            {pieData.map((item, index) => (
-              <View key={index} style={styles.legendItem}>
-                <View style={[styles.legendColor, { backgroundColor: item.color }]} />
-                <Text style={styles.legendLabel} numberOfLines={1}>{item.label}</Text>
-                <Text style={styles.legendValue}>{formatCurrency(item.value)}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* Top Categories */}
-      {stats && stats.top_categories.length > 0 && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Top kategorie</Text>
-          {stats.top_categories.map((item, index) => (
-            <View key={index} style={styles.topCategoryItem}>
-              <View style={styles.topCategoryLeft}>
-                <View style={[styles.topCategoryRank, { backgroundColor: index < 3 ? colors.primary : colors.textLight }]}>
-                  <Text style={styles.topCategoryRankText}>{index + 1}</Text>
-                </View>
-                <Text style={styles.topCategoryName}>{item.category}</Text>
-              </View>
-              <Text style={styles.topCategoryAmount}>{formatCurrency(item.amount)}</Text>
+          <Card style={styles.balanceCard}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.summaryLabel}>Bilans miesiąca</Text>
+              <Text style={styles.balanceHint}>Przychody minus wydatki</Text>
             </View>
-          ))}
-        </View>
-      )}
+            <Text style={[styles.balanceValue, tabular, { color: monthBalance >= 0 ? colors.income : colors.expense }]}>
+              {monthBalance >= 0 ? '+' : '−'}
+              {formatCurrency(Math.abs(monthBalance))}
+            </Text>
+          </Card>
 
-      {(!stats || Object.keys(stats.expenses_by_category).length === 0) && (
-        <View style={styles.emptyState}>
-          <Ionicons name="bar-chart-outline" size={64} color={colors.textLight} />
-          <Text style={styles.emptyText}>Brak danych do wyświetlenia</Text>
-          <Text style={styles.emptySubtext}>Dodaj transakcje aby zobaczyć statystyki</Text>
-        </View>
+          {spending.length === 0 ? (
+            <EmptyState
+              icon="pie-chart-outline"
+              title="Brak wydatków w tym miesiącu"
+              text="Gdy dodasz wydatki, zobaczysz tu, na co idzie najwięcej pieniędzy."
+            />
+          ) : (
+            <Card>
+              <Text style={styles.cardTitle}>Wydatki według kategorii</Text>
+              <View style={styles.chart}>
+                <PieChart
+                  data={spending.map((s) => ({ value: s.amount, color: s.color }))}
+                  donut
+                  radius={96}
+                  innerRadius={66}
+                  innerCircleColor={colors.surface}
+                  centerLabelComponent={() => (
+                    <View style={{ alignItems: 'center' }}>
+                      <Text style={[styles.centerAmount, tabular]}>{formatCurrency(expenses, { hideZeroDecimals: true })}</Text>
+                      <Text style={styles.centerLabel}>wydatki</Text>
+                    </View>
+                  )}
+                />
+              </View>
+
+              {spending.map((s) => (
+                <View key={s.name} style={styles.categoryRow}>
+                  <View style={[styles.categoryIcon, { backgroundColor: s.color + '1F' }]}>
+                    <Ionicons name={s.icon} size={16} color={s.color} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.categoryTop}>
+                      <Text style={styles.categoryName} numberOfLines={1}>{s.name}</Text>
+                      <Text style={[styles.categoryAmount, tabular]}>{formatCurrency(s.amount)}</Text>
+                    </View>
+                    <View style={styles.categoryBottom}>
+                      <View style={{ flex: 1 }}>
+                        <ProgressBar value={s.share} color={s.color} />
+                      </View>
+                      <Text style={[styles.categoryShare, tabular]}>{Math.round(s.share * 100)}%</Text>
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </Card>
+          )}
+        </>
       )}
     </ScrollView>
   );
 }
 
-const createStyles = (colors: any, isDark: boolean) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  contentContainer: {
-    padding: 16,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  summaryRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 16,
-    gap: 12,
-  },
-  summaryCardIncome: {
-    flex: 1,
-    padding: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    backgroundColor: isDark ? '#1B3D1B' : '#E8F5E9',
-    borderWidth: isDark ? 1 : 0,
-    borderColor: '#66BB6A',
-  },
-  summaryCardExpense: {
-    flex: 1,
-    padding: 18,
-    borderRadius: 16,
-    alignItems: 'center',
-    backgroundColor: isDark ? '#3D1B1B' : '#FFEBEE',
-    borderWidth: isDark ? 1 : 0,
-    borderColor: '#EF5350',
-  },
-  summaryLabel: {
-    fontSize: 14,
-    color: colors.text,
-    marginTop: 10,
-    fontWeight: '500',
-  },
-  summaryAmount: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginTop: 6,
-  },
-  balanceCard: {
-    backgroundColor: isDark ? colors.surface : colors.primary,
-    borderRadius: 16,
-    padding: 20,
-    marginBottom: 16,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderWidth: isDark ? 1 : 0,
-    borderColor: colors.primary,
-  },
-  balanceLabel: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: isDark ? colors.text : '#fff',
-  },
-  balanceAmount: {
-    fontSize: 28,
-    fontWeight: 'bold',
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 16,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: isDark ? 0.3 : 0.08,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 18,
-  },
-  chartContainer: {
-    alignItems: 'center',
-    marginVertical: 16,
-  },
-  centerLabel: {
-    alignItems: 'center',
-  },
-  centerLabelAmount: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  centerLabelText: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  legend: {
-    marginTop: 16,
-  },
-  legendItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 10,
-    paddingVertical: 4,
-  },
-  legendColor: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-    marginRight: 10,
-  },
-  legendLabel: {
-    flex: 1,
-    fontSize: 14,
-    color: colors.text,
-  },
-  legendValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  topCategoryItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  topCategoryLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  topCategoryRank: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  topCategoryRankText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  topCategoryName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  topCategoryAmount: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: isDark ? '#EF5350' : colors.expense,
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginTop: 16,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: colors.textLight,
-    marginTop: 8,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.background },
+    content: { paddingHorizontal: space.lg, paddingBottom: 48 },
+    monthSwitcher: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      backgroundColor: colors.surface,
+      borderColor: colors.border,
+      borderWidth: 1,
+      borderRadius: radius.md,
+      padding: 4,
+      marginBottom: space.md,
+    },
+    monthButton: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+    monthLabel: { fontSize: 16, fontWeight: '700', color: colors.text },
+    summaryRow: { flexDirection: 'row', gap: space.md },
+    summaryCard: { flex: 1 },
+    summaryLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+    summaryValue: { fontSize: 20, fontWeight: '800', marginTop: 4 },
+    balanceCard: { flexDirection: 'row', alignItems: 'center' },
+    balanceHint: { fontSize: 12, color: colors.textLight, marginTop: 2 },
+    balanceValue: { fontSize: 20, fontWeight: '800' },
+    cardTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
+    chart: { alignItems: 'center', marginVertical: space.lg },
+    centerAmount: { fontSize: 16, fontWeight: '800', color: colors.text },
+    centerLabel: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+    categoryRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm },
+    categoryIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: space.md,
+    },
+    categoryTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
+    categoryName: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text, marginRight: space.sm },
+    categoryAmount: { fontSize: 14, fontWeight: '700', color: colors.text },
+    categoryBottom: { flexDirection: 'row', alignItems: 'center' },
+    categoryShare: { width: 40, textAlign: 'right', fontSize: 12, color: colors.textSecondary },
+  });

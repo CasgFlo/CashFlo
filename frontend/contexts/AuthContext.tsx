@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import api from '../utils/api';
+import api, { setUnauthorizedHandler } from '../utils/api';
 import { User } from '../utils/types';
+import { apiErrorMessage } from '../utils/format';
 
 interface AuthContextType {
   user: User | null;
@@ -10,6 +11,8 @@ interface AuthContextType {
   register: (email: string, password: string, name: string) => Promise<void>;
   logout: () => Promise<void>;
   deleteAccount: (password: string) => Promise<void>;
+  requestPasswordReset: (email: string) => Promise<void>;
+  resetPassword: (email: string, code: string, newPassword: string) => Promise<void>;
   refreshUser: () => Promise<void>;
   isAuthenticated: boolean;
 }
@@ -21,7 +24,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // An expired or revoked session signs the user out everywhere
+    setUnauthorizedHandler(() => setUser(null));
     checkAuth();
+    return () => setUnauthorizedHandler(null);
   }, []);
 
   const checkAuth = async () => {
@@ -32,8 +38,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUser(response.data);
       }
     } catch (error) {
+      // A 401 already cleared the token in the API client; other errors (e.g. offline) keep it
       console.log('Auth check failed:', error);
-      await AsyncStorage.removeItem('authToken');
     } finally {
       setLoading(false);
     }
@@ -41,23 +47,27 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const login = async (email: string, password: string) => {
     try {
-      const response = await api.post('/auth/login', { email, password });
+      const response = await api.post('/auth/login', { email: email.trim().toLowerCase(), password });
       const { access_token, user: userData } = response.data;
       await AsyncStorage.setItem('authToken', access_token);
       setUser(userData);
     } catch (error: any) {
-      throw new Error(error.response?.data?.detail || 'Login failed');
+      throw new Error(apiErrorMessage(error, 'Nie udało się zalogować. Spróbuj ponownie.'));
     }
   };
 
   const register = async (email: string, password: string, name: string) => {
     try {
-      const response = await api.post('/auth/register', { email, password, name });
+      const response = await api.post('/auth/register', {
+        email: email.trim().toLowerCase(),
+        password,
+        name: name.trim(),
+      });
       const { access_token, user: userData } = response.data;
       await AsyncStorage.setItem('authToken', access_token);
       setUser(userData);
     } catch (error: any) {
-      throw new Error(error.response?.data?.detail || 'Registration failed');
+      throw new Error(apiErrorMessage(error, 'Nie udało się utworzyć konta. Spróbuj ponownie.'));
     }
   };
 
@@ -73,10 +83,35 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (error.response?.status === 403) {
         throw new Error('Nieprawidłowe hasło.');
       }
-      throw new Error('Nie udało się usunąć konta. Sprawdź połączenie z internetem i spróbuj ponownie.');
+      if (error.response?.status === 502 || error.response?.status === 503) {
+        throw new Error(
+          'Nie udało się anulować subskrypcji, więc konto nie zostało usunięte. Spróbuj ponownie albo napisz do nas: cashflo2026@gmail.com.'
+        );
+      }
+      throw new Error(apiErrorMessage(error, 'Nie udało się usunąć konta. Spróbuj ponownie.'));
     }
     await AsyncStorage.removeItem('authToken');
     setUser(null);
+  };
+
+  const requestPasswordReset = async (email: string) => {
+    try {
+      await api.post('/auth/forgot-password', { email: email.trim().toLowerCase() });
+    } catch (error: any) {
+      throw new Error(apiErrorMessage(error, 'Nie udało się wysłać kodu. Spróbuj ponownie.'));
+    }
+  };
+
+  const resetPassword = async (email: string, code: string, newPassword: string) => {
+    try {
+      await api.post('/auth/reset-password', {
+        email: email.trim().toLowerCase(),
+        code: code.trim(),
+        new_password: newPassword,
+      });
+    } catch (error: any) {
+      throw new Error(apiErrorMessage(error, 'Nie udało się zmienić hasła. Spróbuj ponownie.'));
+    }
   };
 
   const refreshUser = async () => {
@@ -100,6 +135,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         register,
         logout,
         deleteAccount,
+        requestPasswordReset,
+        resetPassword,
         refreshUser,
         isAuthenticated: !!user,
       }}

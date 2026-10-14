@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Request, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -12,16 +12,19 @@ from datetime import datetime, timedelta
 from passlib.context import CryptContext
 import jwt
 from bson import ObjectId
-
-# Stripe Checkout helpers come from Emergent's own package, which is only
-# installable on the Emergent platform. Outside it the server still starts and
-# the payment endpoints answer 503 until payments are rewritten.
-try:
-    from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
-    STRIPE_LIB_AVAILABLE = True
-except ImportError:
-    StripeCheckout = CheckoutSessionResponse = CheckoutStatusResponse = CheckoutSessionRequest = None
-    STRIPE_LIB_AVAILABLE = False
+from typing import Literal
+from fastapi.responses import HTMLResponse
+from starlette.concurrency import run_in_threadpool
+import calendar
+import hashlib
+import hmac
+import html
+import re
+import secrets
+import smtplib
+import ssl
+from email.message import EmailMessage
+import stripe
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -41,9 +44,44 @@ ACCESS_TOKEN_EXPIRE_DAYS = 30
 # Stripe Configuration
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('STRIPE_WEBHOOK_SECRET', '')
+stripe.api_key = STRIPE_API_KEY
 
-# Pro subscription price in PLN
-PRO_PRICE_PLN = 19.00
+# Stripe price IDs for each Pro plan (Stripe Dashboard -> Product catalog)
+STRIPE_PRICES = {
+    "monthly": os.environ.get('STRIPE_PRICE_MONTHLY', ''),
+    "yearly": os.environ.get('STRIPE_PRICE_YEARLY', ''),
+    "lifetime": os.environ.get('STRIPE_PRICE_LIFETIME', ''),
+}
+
+# Public address of this server, used for the page Stripe returns to after paying.
+# Falls back to the address the request came in on.
+PUBLIC_API_URL = os.environ.get('PUBLIC_API_URL', '').rstrip('/')
+
+# Web addresses of the app (Expo web build) that checkout may send people back to
+ALLOWED_RETURN_ORIGINS = [
+    o.strip().rstrip('/') for o in os.environ.get('ALLOWED_RETURN_ORIGINS', '').split(',') if o.strip()
+]
+
+# Deep-link scheme of the mobile app (app.json -> expo.scheme)
+APP_SCHEME = os.environ.get('APP_SCHEME', 'cashflo')
+
+# E-mail (password reset codes). Works with any SMTP server, e.g. Gmail with an app password.
+SMTP_HOST = os.environ.get('SMTP_HOST', '')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
+SMTP_FROM = os.environ.get('SMTP_FROM', '') or SMTP_USER
+
+# Free plan limits
+FREE_GOAL_LIMIT = 1
+FREE_CUSTOM_CATEGORY_LIMIT = 3
+
+# Receipts are stored as data URLs; keep them small so lists stay fast
+MAX_RECEIPT_CHARS = 2_500_000
+
+PASSWORD_MIN_LENGTH = 6
+RESET_CODE_TTL_MINUTES = 15
+RESET_CODE_MAX_ATTEMPTS = 5
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -74,8 +112,8 @@ class PyObjectId(ObjectId):
 # User Models
 class UserCreate(BaseModel):
     email: EmailStr
-    password: str
-    name: str
+    password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=128)
+    name: str = Field(min_length=1, max_length=60)
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -87,9 +125,19 @@ class UserResponse(BaseModel):
     name: str
     is_pro: bool = False
     is_admin: bool = False
+    pro_plan: Optional[str] = None
+    can_manage_subscription: bool = False
     created_at: datetime
     last_login: Optional[datetime] = None
     login_count: int = 0
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+    new_password: str = Field(min_length=PASSWORD_MIN_LENGTH, max_length=128)
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -99,24 +147,25 @@ class TokenResponse(BaseModel):
 
 # Transaction Models
 class TransactionCreate(BaseModel):
-    amount: float
-    type: str  # "expense" or "income"
-    category: str
-    description: Optional[str] = ""
+    amount: float = Field(gt=0, lt=100_000_000)
+    type: Literal["expense", "income"]
+    category: str = Field(min_length=1, max_length=60)
+    description: Optional[str] = Field(default="", max_length=500)
     date: datetime
     is_recurring: bool = False
-    recurring_day: Optional[int] = None  # Day of month (1-31) for recurring transactions
-    receipt_image: Optional[str] = None  # base64
+    recurring_day: Optional[int] = Field(default=None, ge=1, le=31)  # Day of month for recurring transactions
+    receipt_image: Optional[str] = None  # data URL (base64)
 
 class TransactionUpdate(BaseModel):
-    amount: Optional[float] = None
-    type: Optional[str] = None
-    category: Optional[str] = None
-    description: Optional[str] = None
+    amount: Optional[float] = Field(default=None, gt=0, lt=100_000_000)
+    type: Optional[Literal["expense", "income"]] = None
+    category: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    description: Optional[str] = Field(default=None, max_length=500)
     date: Optional[datetime] = None
     is_recurring: Optional[bool] = None
-    recurring_day: Optional[int] = None
+    recurring_day: Optional[int] = Field(default=None, ge=1, le=31)
     receipt_image: Optional[str] = None
+    remove_receipt: bool = False
 
 class TransactionResponse(BaseModel):
     id: str
@@ -130,15 +179,16 @@ class TransactionResponse(BaseModel):
     recurring_day: Optional[int] = None
     recurring_parent_id: Optional[str] = None
     receipt_image: Optional[str] = None
+    has_receipt: bool = False
     created_at: datetime
 
 
 # Category Models
 class CategoryCreate(BaseModel):
-    name: str
-    icon: str
-    color: str
-    type: Optional[str] = "expense"
+    name: str = Field(min_length=1, max_length=30)
+    icon: str = Field(min_length=1, max_length=40)
+    color: str = Field(pattern=r"^#[0-9A-Fa-f]{6}$")
+    type: Literal["expense", "income"] = "expense"
 
 class CategoryResponse(BaseModel):
     id: str
@@ -152,15 +202,15 @@ class CategoryResponse(BaseModel):
 
 # Goal Models
 class GoalCreate(BaseModel):
-    name: str
-    target_amount: float
-    current_amount: float = 0
+    name: str = Field(min_length=1, max_length=60)
+    target_amount: float = Field(gt=0, lt=100_000_000)
+    current_amount: float = Field(default=0, ge=0, lt=100_000_000)
     deadline: Optional[datetime] = None
 
 class GoalUpdate(BaseModel):
-    name: Optional[str] = None
-    target_amount: Optional[float] = None
-    current_amount: Optional[float] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=60)
+    target_amount: Optional[float] = Field(default=None, gt=0, lt=100_000_000)
+    current_amount: Optional[float] = Field(default=None, ge=0, lt=100_000_000)
     deadline: Optional[datetime] = None
 
 class GoalResponse(BaseModel):
@@ -176,7 +226,7 @@ class GoalResponse(BaseModel):
 
 # Budget Models
 class BudgetCreate(BaseModel):
-    monthly_limit: float
+    monthly_limit: float = Field(ge=0, lt=100_000_000)
     category_limits: Optional[dict] = {}
 
 class BudgetUpdate(BaseModel):
@@ -193,16 +243,19 @@ class BudgetResponse(BaseModel):
 
 # Stats Models
 class MonthlyStats(BaseModel):
-    total_income: float
-    total_expenses: float
-    balance: float
+    total_income: float          # this month
+    total_expenses: float        # this month
+    balance: float               # all-time balance (all income minus all expenses)
+    month_balance: float = 0     # this month's income minus expenses
     expenses_by_category: dict
     top_categories: List[dict]
 
 
 # Payment Models
 class CheckoutRequest(BaseModel):
-    origin_url: str
+    plan: Literal["monthly", "yearly", "lifetime"]
+    platform: Literal["native", "web"] = "native"
+    origin_url: Optional[str] = None  # web only: where the app runs
 
 class PaymentStatusResponse(BaseModel):
     status: str
@@ -212,10 +265,16 @@ class PaymentStatusResponse(BaseModel):
 
 # ============= UTILITY FUNCTIONS =============
 
+def _utc_timestamp(dt: datetime) -> int:
+    """Seconds since epoch for a naive UTC datetime."""
+    return calendar.timegm(dt.utctimetuple())
+
+
 def create_access_token(data: dict):
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire})
+    now = datetime.utcnow()
+    expire = now + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    to_encode.update({"exp": expire, "iat": _utc_timestamp(now)})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
@@ -244,12 +303,79 @@ def to_object_id(value: str, not_found: str = "Not found") -> ObjectId:
     return ObjectId(value)
 
 
-def stripe_webhook_url(request: Request) -> str:
-    return str(request.base_url).rstrip('/') + "/api/webhook/stripe"
-
-
 def stripe_ready() -> bool:
-    return bool(STRIPE_API_KEY) and STRIPE_LIB_AVAILABLE
+    return bool(STRIPE_API_KEY)
+
+
+def sget(obj, key, default=None):
+    """Read a field from a Stripe object or a dict, whichever it is."""
+    if obj is None:
+        return default
+    try:
+        value = obj[key]
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return default
+    return default if value is None else value
+
+
+def public_base_url(request: Request) -> str:
+    return PUBLIC_API_URL or str(request.base_url).rstrip('/')
+
+
+def smtp_ready() -> bool:
+    return bool(SMTP_HOST and SMTP_USER and SMTP_PASSWORD)
+
+
+def send_email(to: str, subject: str, body: str) -> None:
+    """Send a plain-text e-mail through the configured SMTP server (blocking: run it in a thread)."""
+    msg = EmailMessage()
+    msg["From"] = SMTP_FROM
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(body)
+    context = ssl.create_default_context()
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=20) as server:
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+    else:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.starttls(context=context)
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.send_message(msg)
+
+
+def hash_reset_code(user_id: str, code: str) -> str:
+    return hmac.new(SECRET_KEY.encode(), f"{user_id}:{code}".encode(), hashlib.sha256).hexdigest()
+
+
+def user_to_response(user: dict) -> UserResponse:
+    is_admin = user.get("is_admin", False)
+    return UserResponse(
+        id=str(user["_id"]),
+        email=user["email"],
+        name=user["name"],
+        is_pro=user.get("is_pro", False) or is_admin,
+        is_admin=is_admin,
+        pro_plan=user.get("pro_plan"),
+        can_manage_subscription=bool(user.get("stripe_customer_id") and user.get("stripe_subscription_id")),
+        created_at=user["created_at"],
+        last_login=user.get("last_login"),
+        login_count=user.get("login_count", 0),
+    )
+
+
+def is_pro_user(user: dict) -> bool:
+    return bool(user.get("is_pro", False) or user.get("is_admin", False))
+
+
+def validate_receipt(receipt: Optional[str]) -> None:
+    if receipt is None:
+        return
+    if not receipt.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="Receipt must be an image")
+    if len(receipt) > MAX_RECEIPT_CHARS:
+        raise HTTPException(status_code=413, detail="Receipt image is too large")
 
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
@@ -259,10 +385,15 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     if not user_id or not ObjectId.is_valid(user_id):
         raise HTTPException(status_code=401, detail="Invalid token")
 
-    user = await db.users.find_one({"_id": to_object_id(user_id, "User not found")})
+    user = await db.users.find_one({"_id": ObjectId(user_id)})
     if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
+        raise HTTPException(status_code=401, detail="User not found")
+
+    # Sessions started before the last password change stop working
+    changed_at = user.get("password_changed_at")
+    if changed_at and payload.get("iat", 0) < _utc_timestamp(changed_at):
+        raise HTTPException(status_code=401, detail="Session expired")
+
     return user
 
 
@@ -294,22 +425,19 @@ DEFAULT_CATEGORIES = [
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
     email = normalize_email(user_data.email)
+    name = user_data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Name is required")
 
-    # Check if user exists
     existing_user = await db.users.find_one({"email": email}, collation=EMAIL_COLLATION)
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Hash password
-    hashed_password = pwd_context.hash(user_data.password)
-
     now = datetime.utcnow()
-
-    # Create user
     user_dict = {
         "email": email,
-        "password_hash": hashed_password,
-        "name": user_data.name,
+        "password_hash": pwd_context.hash(user_data.password),
+        "name": name,
         "is_pro": False,
         "is_admin": False,
         "created_at": now,
@@ -317,101 +445,167 @@ async def register(user_data: UserCreate):
         "login_count": 1,
         "login_history": [now],
     }
-    
     result = await db.users.insert_one(user_dict)
     user_id = str(result.inserted_id)
-    
-    # Create default categories for user
-    for cat in DEFAULT_CATEGORIES:
-        await db.categories.insert_one({
+    user_dict["_id"] = result.inserted_id
+
+    # Default categories for the new user
+    await db.categories.insert_many([
+        {
             "user_id": user_id,
             "name": cat["name"],
             "icon": cat["icon"],
             "color": cat["color"],
             "type": cat.get("type", "expense"),
-            "is_default": True
-        })
-    
-    # Create access token
+            "is_default": True,
+        }
+        for cat in DEFAULT_CATEGORIES
+    ])
+
     access_token = create_access_token({"user_id": user_id})
-    
-    user_response = UserResponse(
-        id=user_id,
-        email=email,
-        name=user_data.name,
-        is_pro=False,
-        is_admin=False,
-        created_at=user_dict["created_at"],
-        last_login=now,
-        login_count=1,
-    )
-    
-    return TokenResponse(access_token=access_token, user=user_response)
+    return TokenResponse(access_token=access_token, user=user_to_response(user_dict))
 
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(user_data: UserLogin):
-    # Find user
     user = await db.users.find_one({"email": normalize_email(user_data.email)}, collation=EMAIL_COLLATION)
-    if not user:
+    if not user or not pwd_context.verify(user_data.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # Verify password
-    if not pwd_context.verify(user_data.password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    user_id = str(user["_id"])
     now = datetime.utcnow()
-
-    is_admin = user.get("is_admin", False)
-    update_fields = {
-        "last_login": now,
-    }
-    inc_fields = {"login_count": 1}
-    
-    # Keep only last 100 logins for retention metrics
+    # Keep only the last 100 logins for retention metrics
     await db.users.update_one(
         {"_id": user["_id"]},
         {
-            "$set": update_fields,
-            "$inc": inc_fields,
+            "$set": {"last_login": now},
+            "$inc": {"login_count": 1},
             "$push": {"login_history": {"$each": [now], "$slice": -100}},
-        }
+        },
     )
-    
-    # Create access token
-    access_token = create_access_token({"user_id": user_id})
-    
-    user_response = UserResponse(
-        id=user_id,
-        email=user["email"],
-        name=user["name"],
-        is_pro=user.get("is_pro", False) or is_admin,
-        is_admin=is_admin,
-        created_at=user["created_at"],
-        last_login=now,
-        login_count=user.get("login_count", 0) + 1,
-    )
-    
-    return TokenResponse(access_token=access_token, user=user_response)
+    user["last_login"] = now
+    user["login_count"] = user.get("login_count", 0) + 1
+
+    access_token = create_access_token({"user_id": str(user["_id"])})
+    return TokenResponse(access_token=access_token, user=user_to_response(user))
 
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
-    return UserResponse(
-        id=str(current_user["_id"]),
-        email=current_user["email"],
-        name=current_user["name"],
-        is_pro=current_user.get("is_pro", False),
-        is_admin=current_user.get("is_admin", False),
-        created_at=current_user["created_at"],
-        last_login=current_user.get("last_login"),
-        login_count=current_user.get("login_count", 0),
+    return user_to_response(current_user)
+
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordRequest):
+    """E-mail a 6-digit code for setting a new password.
+
+    Answers the same way whether or not the address has an account,
+    so it can't be used to check who is registered.
+    """
+    if not smtp_ready():
+        logger.error("Password reset requested, but SMTP is not configured")
+        raise HTTPException(status_code=503, detail="Password reset is not available")
+
+    user = await db.users.find_one({"email": normalize_email(body.email)}, collation=EMAIL_COLLATION)
+    if not user:
+        return {"status": "ok"}
+
+    now = datetime.utcnow()
+    last_sent = user.get("reset_requested_at")
+    if last_sent and now - last_sent < timedelta(seconds=60):
+        return {"status": "ok"}
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {
+            "reset_code_hash": hash_reset_code(str(user["_id"]), code),
+            "reset_expires_at": now + timedelta(minutes=RESET_CODE_TTL_MINUTES),
+            "reset_attempts": 0,
+            "reset_requested_at": now,
+        }},
     )
+
+    text = (
+        f"Cześć {user.get('name', '')},\n\n"
+        f"Twój kod do ustawienia nowego hasła w CashFlo: {code}\n\n"
+        f"Kod jest ważny przez {RESET_CODE_TTL_MINUTES} minut. "
+        "Jeśli to nie Ty, zignoruj tę wiadomość. Twoje hasło się nie zmieni.\n\n"
+        "Zespół CashFlo"
+    )
+    try:
+        await run_in_threadpool(send_email, user["email"], "Kod do zmiany hasła w CashFlo", text)
+    except Exception as e:
+        logger.error(f"Could not send password reset e-mail: {e}")
+        raise HTTPException(status_code=503, detail="Could not send e-mail")
+
+    return {"status": "ok"}
+
+
+@api_router.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordRequest):
+    invalid = HTTPException(status_code=400, detail="Invalid or expired code")
+
+    user = await db.users.find_one({"email": normalize_email(body.email)}, collation=EMAIL_COLLATION)
+    if not user or not user.get("reset_code_hash"):
+        raise invalid
+
+    now = datetime.utcnow()
+    expires_at = user.get("reset_expires_at")
+    if not expires_at or expires_at < now:
+        raise invalid
+    if user.get("reset_attempts", 0) >= RESET_CODE_MAX_ATTEMPTS:
+        raise invalid
+
+    expected = user["reset_code_hash"]
+    given = hash_reset_code(str(user["_id"]), body.code.strip())
+    if not hmac.compare_digest(expected, given):
+        await db.users.update_one({"_id": user["_id"]}, {"$inc": {"reset_attempts": 1}})
+        raise invalid
+
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {
+            "$set": {
+                "password_hash": pwd_context.hash(body.new_password),
+                "password_changed_at": now,
+            },
+            "$unset": {
+                "reset_code_hash": "",
+                "reset_expires_at": "",
+                "reset_attempts": "",
+                "reset_requested_at": "",
+            },
+        },
+    )
+    logger.info(f"Password reset for user {user['_id']}")
+    return {"status": "ok"}
 
 
 class DeleteAccountRequest(BaseModel):
     password: str
+
+
+async def cancel_stripe_subscription(user: dict) -> None:
+    """Cancel the user's Stripe subscription so they are not charged again.
+
+    Raises an error (and the account is kept) if the subscription can't be cancelled.
+    """
+    sub_id = user.get("stripe_subscription_id")
+    if not sub_id:
+        return
+    if not stripe_ready():
+        raise HTTPException(status_code=503, detail="Could not cancel subscription")
+    try:
+        await run_in_threadpool(stripe.Subscription.cancel, sub_id)
+    except Exception as e:
+        try:
+            subscription = await run_in_threadpool(stripe.Subscription.retrieve, sub_id)
+            if sget(subscription, "status") == "canceled":
+                return
+        except Exception:
+            pass
+        logger.error(f"Could not cancel subscription {sub_id}: {e}")
+        raise HTTPException(status_code=502, detail="Could not cancel subscription")
 
 
 @api_router.post("/auth/delete-account")
@@ -426,6 +620,9 @@ async def delete_own_account(
     """
     if not pwd_context.verify(body.password, current_user["password_hash"]):
         raise HTTPException(status_code=403, detail="Invalid password")
+
+    # Stop future charges first; if that fails, nothing is deleted
+    await cancel_stripe_subscription(current_user)
 
     user_id = str(current_user["_id"])
     await db.transactions.delete_many({"user_id": user_id})
@@ -448,29 +645,46 @@ async def delete_own_account(
 
 # ============= TRANSACTION ENDPOINTS =============
 
+def transaction_to_response(t: dict, include_receipt: bool = True) -> TransactionResponse:
+    receipt = t.get("receipt_image")
+    return TransactionResponse(
+        id=str(t["_id"]),
+        user_id=t["user_id"],
+        amount=t["amount"],
+        type=t["type"],
+        category=t["category"],
+        description=t.get("description") or "",
+        date=t["date"],
+        is_recurring=t.get("is_recurring", False),
+        recurring_day=t.get("recurring_day"),
+        recurring_parent_id=t.get("recurring_parent_id"),
+        receipt_image=receipt if include_receipt else None,
+        has_receipt=bool(receipt) if include_receipt else bool(t.get("has_receipt")),
+        created_at=t["created_at"],
+    )
+
+
 @api_router.post("/transactions", response_model=TransactionResponse)
 async def create_transaction(
     transaction: TransactionCreate,
     current_user: dict = Depends(get_current_user)
 ):
+    validate_receipt(transaction.receipt_image)
+
     # For recurring transactions: set the date to the first occurrence (current month at recurring_day)
     tx_date = transaction.date
     if transaction.is_recurring and transaction.recurring_day:
         now = datetime.utcnow()
-        try:
-            tx_date = datetime(now.year, now.month, transaction.recurring_day)
-        except ValueError:
-            # day out of range for current month (e.g., Feb 30) - use last valid day
-            import calendar
-            last_day = calendar.monthrange(now.year, now.month)[1]
-            tx_date = datetime(now.year, now.month, min(transaction.recurring_day, last_day))
-    
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        # Day out of range for this month (e.g. 31 in April) -> last day of the month
+        tx_date = datetime(now.year, now.month, min(transaction.recurring_day, last_day))
+
     transaction_dict = {
         "user_id": str(current_user["_id"]),
-        "amount": transaction.amount,
+        "amount": round(transaction.amount, 2),
         "type": transaction.type,
-        "category": transaction.category,
-        "description": transaction.description,
+        "category": transaction.category.strip(),
+        "description": (transaction.description or "").strip(),
         "date": tx_date,
         "is_recurring": transaction.is_recurring,
         "recurring_day": transaction.recurring_day if transaction.is_recurring else None,
@@ -478,11 +692,9 @@ async def create_transaction(
         "receipt_image": transaction.receipt_image,
         "created_at": datetime.utcnow()
     }
-    
+
     result = await db.transactions.insert_one(transaction_dict)
-    transaction_dict["id"] = str(result.inserted_id)
-    
-    return TransactionResponse(**transaction_dict)
+    return transaction_to_response(transaction_dict)
 
 
 async def process_recurring_transactions(user_id: str):
@@ -561,37 +773,34 @@ async def process_recurring_transactions(user_id: str):
 async def get_transactions(
     current_user: dict = Depends(get_current_user),
     limit: int = 100,
-    skip: int = 0
+    skip: int = 0,
+    tx_type: Optional[Literal["expense", "income"]] = Query(default=None, alias="type"),
 ):
     user_id = str(current_user["_id"])
-    
+
     # Auto-generate missing recurring transactions
     try:
         await process_recurring_transactions(user_id)
     except Exception as e:
         logger.error(f"Error processing recurring transactions: {e}")
-    
-    transactions = await db.transactions.find(
-        {"user_id": user_id}
-    ).sort("date", -1).skip(skip).limit(limit).to_list(limit)
-    
-    return [
-        TransactionResponse(
-            id=str(t["_id"]),
-            user_id=t["user_id"],
-            amount=t["amount"],
-            type=t["type"],
-            category=t["category"],
-            description=t.get("description", ""),
-            date=t["date"],
-            is_recurring=t.get("is_recurring", False),
-            recurring_day=t.get("recurring_day"),
-            recurring_parent_id=t.get("recurring_parent_id"),
-            receipt_image=t.get("receipt_image"),
-            created_at=t["created_at"]
-        )
-        for t in transactions
+
+    limit = max(1, min(limit, 200))
+    skip = max(0, skip)
+    match = {"user_id": user_id}
+    if tx_type:
+        match["type"] = tx_type
+
+    pipeline = [
+        {"$match": match},
+        {"$sort": {"date": -1, "_id": -1}},
+        {"$skip": skip},
+        {"$limit": limit},
+        # Receipt photos are large: the list only says whether there is one.
+        {"$addFields": {"has_receipt": {"$gt": [{"$ifNull": ["$receipt_image", None]}, None]}}},
+        {"$project": {"receipt_image": 0}},
     ]
+    transactions = await db.transactions.aggregate(pipeline).to_list(limit)
+    return [transaction_to_response(t, include_receipt=False) for t in transactions]
 
 
 @api_router.get("/transactions/{transaction_id}", response_model=TransactionResponse)
@@ -603,24 +812,9 @@ async def get_transaction(
         "_id": to_object_id(transaction_id, "Transaction not found"),
         "user_id": str(current_user["_id"])
     })
-    
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    return TransactionResponse(
-        id=str(transaction["_id"]),
-        user_id=transaction["user_id"],
-        amount=transaction["amount"],
-        type=transaction["type"],
-        category=transaction["category"],
-        description=transaction.get("description", ""),
-        date=transaction["date"],
-        is_recurring=transaction.get("is_recurring", False),
-        recurring_day=transaction.get("recurring_day"),
-        recurring_parent_id=transaction.get("recurring_parent_id"),
-        receipt_image=transaction.get("receipt_image"),
-        created_at=transaction["created_at"]
-    )
+    return transaction_to_response(transaction)
 
 
 @api_router.put("/transactions/{transaction_id}", response_model=TransactionResponse)
@@ -629,35 +823,32 @@ async def update_transaction(
     transaction_update: TransactionUpdate,
     current_user: dict = Depends(get_current_user)
 ):
-    update_data = {k: v for k, v in transaction_update.dict().items() if v is not None}
-    
+    fields = transaction_update.model_dump()
+    remove_receipt = fields.pop("remove_receipt", False)
+    update_data = {k: v for k, v in fields.items() if v is not None}
+
+    if "receipt_image" in update_data:
+        validate_receipt(update_data["receipt_image"])
+    if remove_receipt:
+        update_data["receipt_image"] = None
+    if "amount" in update_data:
+        update_data["amount"] = round(update_data["amount"], 2)
+    if "description" in update_data:
+        update_data["description"] = update_data["description"].strip()
+
     if not update_data:
         raise HTTPException(status_code=400, detail="No data to update")
-    
+
+    tx_id = to_object_id(transaction_id, "Transaction not found")
     result = await db.transactions.update_one(
-        {"_id": to_object_id(transaction_id, "Transaction not found"), "user_id": str(current_user["_id"])},
+        {"_id": tx_id, "user_id": str(current_user["_id"])},
         {"$set": update_data}
     )
-    
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
-    updated_transaction = await db.transactions.find_one({"_id": to_object_id(transaction_id, "Transaction not found")})
-    
-    return TransactionResponse(
-        id=str(updated_transaction["_id"]),
-        user_id=updated_transaction["user_id"],
-        amount=updated_transaction["amount"],
-        type=updated_transaction["type"],
-        category=updated_transaction["category"],
-        description=updated_transaction.get("description", ""),
-        date=updated_transaction["date"],
-        is_recurring=updated_transaction.get("is_recurring", False),
-        recurring_day=updated_transaction.get("recurring_day"),
-        recurring_parent_id=updated_transaction.get("recurring_parent_id"),
-        receipt_image=updated_transaction.get("receipt_image"),
-        created_at=updated_transaction["created_at"]
-    )
+
+    updated_transaction = await db.transactions.find_one({"_id": tx_id})
+    return transaction_to_response(updated_transaction)
 
 
 @api_router.delete("/transactions/{transaction_id}")
@@ -669,10 +860,10 @@ async def delete_transaction(
         "_id": to_object_id(transaction_id, "Transaction not found"),
         "user_id": str(current_user["_id"])
     })
-    
+
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Transaction not found")
-    
+
     return {"message": "Transaction deleted successfully"}
 
 
@@ -744,7 +935,8 @@ async def get_monthly_stats(
     return MonthlyStats(
         total_income=monthly_income,
         total_expenses=monthly_expenses,
-        balance=total_balance,  # This is now TOTAL balance from all transactions
+        balance=total_balance,  # all-time balance from all transactions
+        month_balance=monthly_income - monthly_expenses,
         expenses_by_category=expenses_by_category,
         top_categories=top_categories
     )
@@ -752,10 +944,22 @@ async def get_monthly_stats(
 
 # ============= CATEGORY ENDPOINTS =============
 
+def category_to_response(c: dict) -> CategoryResponse:
+    return CategoryResponse(
+        id=str(c["_id"]),
+        user_id=c["user_id"],
+        name=c["name"],
+        icon=c["icon"],
+        color=c["color"],
+        type=c.get("type", "expense"),
+        is_default=c.get("is_default", False),
+    )
+
+
 @api_router.get("/categories", response_model=List[CategoryResponse])
 async def get_categories(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
-    
+
     # Backfill: ensure user has income categories (added later for existing users)
     income_count = await db.categories.count_documents({
         "user_id": user_id,
@@ -763,32 +967,20 @@ async def get_categories(current_user: dict = Depends(get_current_user)):
     })
     if income_count == 0:
         income_defaults = [c for c in DEFAULT_CATEGORIES if c.get("type") == "income"]
-        for cat in income_defaults:
-            await db.categories.insert_one({
+        await db.categories.insert_many([
+            {
                 "user_id": user_id,
                 "name": cat["name"],
                 "icon": cat["icon"],
                 "color": cat["color"],
-                "type": cat.get("type", "expense"),
-                "is_default": True
-            })
-    
-    categories = await db.categories.find(
-        {"user_id": user_id}
-    ).to_list(100)
-    
-    return [
-        CategoryResponse(
-            id=str(c["_id"]),
-            user_id=c["user_id"],
-            name=c["name"],
-            icon=c["icon"],
-            color=c["color"],
-            type=c.get("type", "expense"),
-            is_default=c.get("is_default", False)
-        )
-        for c in categories
-    ]
+                "type": "income",
+                "is_default": True,
+            }
+            for cat in income_defaults
+        ])
+
+    categories = await db.categories.find({"user_id": user_id}).to_list(200)
+    return [category_to_response(c) for c in categories]
 
 
 @api_router.post("/categories", response_model=CategoryResponse)
@@ -796,20 +988,55 @@ async def create_category(
     category: CategoryCreate,
     current_user: dict = Depends(get_current_user)
 ):
-    category_type = category.type if category.type in ("expense", "income") else "expense"
+    user_id = str(current_user["_id"])
+    name = category.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Category name is required")
+
+    if not is_pro_user(current_user):
+        custom_count = await db.categories.count_documents({"user_id": user_id, "is_default": {"$ne": True}})
+        if custom_count >= FREE_CUSTOM_CATEGORY_LIMIT:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Free users can create up to {FREE_CUSTOM_CATEGORY_LIMIT} custom categories. Upgrade to Pro for unlimited categories.",
+            )
+
+    duplicate = await db.categories.find_one(
+        {"user_id": user_id, "type": category.type, "name": name},
+        collation=EMAIL_COLLATION,
+    )
+    if duplicate:
+        raise HTTPException(status_code=400, detail="Category already exists")
+
     category_dict = {
-        "user_id": str(current_user["_id"]),
-        "name": category.name,
+        "user_id": user_id,
+        "name": name,
         "icon": category.icon,
-        "color": category.color,
-        "type": category_type,
-        "is_default": False
+        "color": category.color.upper(),
+        "type": category.type,
+        "is_default": False,
     }
-    
-    result = await db.categories.insert_one(category_dict)
-    category_dict["id"] = str(result.inserted_id)
-    
-    return CategoryResponse(**category_dict)
+    await db.categories.insert_one(category_dict)
+    return category_to_response(category_dict)
+
+
+@api_router.delete("/categories/{category_id}")
+async def delete_category(
+    category_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete one of the user's own categories. Past transactions keep their category name."""
+    category = await db.categories.find_one({
+        "_id": to_object_id(category_id, "Category not found"),
+        "user_id": str(current_user["_id"]),
+    })
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    if category.get("is_default"):
+        raise HTTPException(status_code=400, detail="Default categories can't be deleted")
+
+    await db.categories.delete_one({"_id": category["_id"]})
+    return {"status": "deleted"}
 
 
 # ============= GOAL ENDPOINTS =============
@@ -821,20 +1048,19 @@ async def create_goal(
 ):
     # Check if user is Pro or has reached free tier limit
     user_id = str(current_user["_id"])
-    is_pro = current_user.get("is_pro", False)
-    
-    if not is_pro:
+
+    if not is_pro_user(current_user):
         # Count existing goals for free users
         existing_goals_count = await db.goals.count_documents({"user_id": user_id})
-        if existing_goals_count >= 1:
+        if existing_goals_count >= FREE_GOAL_LIMIT:
             raise HTTPException(
-                status_code=403, 
-                detail="Free users can create only 1 goal. Upgrade to Pro for unlimited goals."
+                status_code=403,
+                detail=f"Free users can create only {FREE_GOAL_LIMIT} goal. Upgrade to Pro for unlimited goals."
             )
-    
+
     goal_dict = {
         "user_id": user_id,
-        "name": goal.name,
+        "name": goal.name.strip(),
         "target_amount": goal.target_amount,
         "current_amount": goal.current_amount,
         "deadline": goal.deadline,
@@ -882,14 +1108,14 @@ async def get_goals(current_user: dict = Depends(get_current_user)):
 async def get_goals_count(current_user: dict = Depends(get_current_user)):
     """Get count of user's goals and check if they can add more"""
     user_id = str(current_user["_id"])
-    is_pro = current_user.get("is_pro", False)
+    is_pro = is_pro_user(current_user)
     count = await db.goals.count_documents({"user_id": user_id})
-    
+
     return {
         "count": count,
         "is_pro": is_pro,
-        "can_add_more": is_pro or count < 1,
-        "limit": "unlimited" if is_pro else 1
+        "can_add_more": is_pro or count < FREE_GOAL_LIMIT,
+        "limit": "unlimited" if is_pro else FREE_GOAL_LIMIT
     }
 
 
@@ -1023,6 +1249,85 @@ async def get_budget(current_user: dict = Depends(get_current_user)):
 
 
 # ============= STRIPE PAYMENT ENDPOINTS =============
+#
+# Flow: the app asks for a Checkout session for a plan -> the user pays on Stripe's page ->
+# Stripe sends them back (web: straight to the app, phone: to /api/payments/return, which
+# hands them back to the app) -> the app asks /payments/status, and the signed webhook
+# confirms the same thing in the background. Both paths only activate Pro for checkout
+# sessions this server created for that user.
+
+ACTIVE_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
+SESSION_ID_RE = re.compile(r"^cs_(test|live)_[A-Za-z0-9]+$")
+
+
+def _deep_link(path: str) -> str:
+    return f"{APP_SCHEME}://{path}"
+
+
+def _web_origin(origin_url: Optional[str]) -> str:
+    origin = (origin_url or "").rstrip('/')
+    if origin not in ALLOWED_RETURN_ORIGINS:
+        raise HTTPException(status_code=400, detail="Return address not allowed")
+    return origin
+
+
+async def activate_pro_from_session(session) -> bool:
+    """Turn on Pro for the user a paid Checkout session belongs to. Safe to call more than once."""
+    metadata = sget(session, "metadata", {})
+    user_id = sget(session, "client_reference_id") or sget(metadata, "user_id")
+    if sget(metadata, "product") != "cashflo_pro" or not user_id or not ObjectId.is_valid(user_id):
+        return False
+    if sget(session, "status") != "complete" or sget(session, "payment_status") not in ("paid", "no_payment_required"):
+        return False
+
+    # Only sessions this server created for this user count
+    payment = await db.payment_transactions.find_one({"session_id": sget(session, "id"), "user_id": user_id})
+    if not payment:
+        logger.warning(f"Paid checkout session {sget(session, 'id')} is not in our records; ignored")
+        return False
+
+    updates = {"is_pro": True, "pro_plan": sget(metadata, "plan"), "pro_activated_at": datetime.utcnow()}
+    customer = sget(session, "customer")
+    subscription = sget(session, "subscription")
+    if customer:
+        updates["stripe_customer_id"] = customer if isinstance(customer, str) else sget(customer, "id")
+    if subscription:
+        updates["stripe_subscription_id"] = subscription if isinstance(subscription, str) else sget(subscription, "id")
+    await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": updates})
+
+    amount_total = sget(session, "amount_total")
+    await db.payment_transactions.update_one(
+        {"_id": payment["_id"]},
+        {"$set": {
+            "status": "complete",
+            "payment_status": "paid",
+            "pro_activated": True,
+            "amount": amount_total / 100 if amount_total else payment.get("amount", 0),
+            "updated_at": datetime.utcnow(),
+        }},
+    )
+    return True
+
+
+async def sync_subscription_status(subscription, deleted: bool) -> None:
+    """Keep Pro in step with the Stripe subscription (renewed, unpaid, cancelled...)."""
+    sub_id = sget(subscription, "id")
+    if not sub_id:
+        return
+    user = await db.users.find_one({"stripe_subscription_id": sub_id})
+    if not user or user.get("pro_plan") == "lifetime":
+        return
+
+    status_ = sget(subscription, "status", "")
+    if deleted or status_ not in ACTIVE_SUBSCRIPTION_STATUSES:
+        update = {"$set": {"is_pro": False, "pro_ended_at": datetime.utcnow()}}
+        if deleted or status_ == "canceled":
+            update["$unset"] = {"stripe_subscription_id": ""}
+        await db.users.update_one({"_id": user["_id"]}, update)
+        logger.info(f"Pro ended for user {user['_id']} (subscription {status_ or 'deleted'})")
+    elif not user.get("is_pro"):
+        await db.users.update_one({"_id": user["_id"]}, {"$set": {"is_pro": True}})
+
 
 @api_router.post("/payments/checkout")
 async def create_checkout_session(
@@ -1030,235 +1335,220 @@ async def create_checkout_session(
     checkout_data: CheckoutRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Create Stripe checkout session for Pro subscription"""
-    if not stripe_ready():
-        raise HTTPException(status_code=503, detail="Stripe not configured")
-    
-    user_id = str(current_user["_id"])
-    user_email = current_user["email"]
-    
-    # Check if already Pro
+    """Start a Stripe Checkout for one of the Pro plans."""
+    price_id = STRIPE_PRICES.get(checkout_data.plan)
+    if not stripe_ready() or not price_id:
+        raise HTTPException(status_code=503, detail="Payments are not configured")
     if current_user.get("is_pro", False):
-        raise HTTPException(status_code=400, detail="User already has Pro subscription")
-    
-    # Build URLs
-    origin_url = checkout_data.origin_url.rstrip('/')
-    success_url = f"{origin_url}/pro/success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{origin_url}/pro/upgrade"
-    
-    # Initialize Stripe
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=stripe_webhook_url(request))
+        raise HTTPException(status_code=400, detail="User already has Pro")
 
-    # Create checkout session with PLN currency
-    checkout_request = CheckoutSessionRequest(
-        amount=PRO_PRICE_PLN,
-        currency="pln",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "user_id": user_id,
-            "user_email": user_email,
-            "product": "cashflo_pro"
-        },
-        payment_methods=["card", "blik"]
-    )
-    
+    user_id = str(current_user["_id"])
+    if checkout_data.platform == "web":
+        origin = _web_origin(checkout_data.origin_url)
+        success_url = f"{origin}/pro/success?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{origin}/pro/upgrade"
+    else:
+        base = public_base_url(request)
+        success_url = f"{base}/api/payments/return?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{base}/api/payments/return?cancelled=1"
+
+    is_subscription = checkout_data.plan != "lifetime"
+    metadata = {"user_id": user_id, "plan": checkout_data.plan, "product": "cashflo_pro"}
+    params = {
+        "mode": "subscription" if is_subscription else "payment",
+        "line_items": [{"price": price_id, "quantity": 1}],
+        "success_url": success_url,
+        "cancel_url": cancel_url,
+        "client_reference_id": user_id,
+        "metadata": metadata,
+        "locale": "pl",
+    }
+    if current_user.get("stripe_customer_id"):
+        params["customer"] = current_user["stripe_customer_id"]
+    else:
+        params["customer_email"] = current_user["email"]
+        if not is_subscription:
+            params["customer_creation"] = "always"
+    if is_subscription:
+        params["subscription_data"] = {"metadata": metadata}
+    else:
+        params["payment_intent_data"] = {"metadata": metadata}
+
     try:
-        session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
-        
-        # Store payment transaction in database
-        payment_record = {
-            "user_id": user_id,
-            "session_id": session.session_id,
-            "amount": PRO_PRICE_PLN,
-            "currency": "pln",
-            "status": "pending",
-            "payment_status": "initiated",
-            "metadata": {
-                "user_email": user_email,
-                "product": "cashflo_pro"
-            },
-            "created_at": datetime.utcnow()
-        }
-        await db.payment_transactions.insert_one(payment_record)
-        
-        return {
-            "url": session.url,
-            "session_id": session.session_id
-        }
+        session = await run_in_threadpool(stripe.checkout.Session.create, **params)
     except Exception as e:
-        logger.error(f"Error creating checkout session: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Payment error: {str(e)}")
+        logger.error(f"Error creating checkout session: {e}")
+        raise HTTPException(status_code=502, detail="Could not start payment")
+
+    amount_total = sget(session, "amount_total")
+    await db.payment_transactions.insert_one({
+        "user_id": user_id,
+        "session_id": sget(session, "id"),
+        "plan": checkout_data.plan,
+        "price_id": price_id,
+        "amount": amount_total / 100 if amount_total else 0,
+        "currency": sget(session, "currency", "pln"),
+        "status": "pending",
+        "payment_status": "initiated",
+        "metadata": {"user_email": current_user["email"], "product": "cashflo_pro"},
+        "created_at": datetime.utcnow(),
+    })
+
+    return {"url": sget(session, "url"), "session_id": sget(session, "id")}
+
+
+@api_router.get("/payments/return", response_class=HTMLResponse)
+async def payment_return(
+    session_id: Optional[str] = None,
+    cancelled: Optional[int] = None,
+    portal: Optional[int] = None,
+):
+    """Page Stripe opens on the phone after paying. It hands the user back to the app."""
+    if portal:
+        target = _deep_link("more")
+        title, text = "Gotowe", "Możesz wrócić do aplikacji CashFlo."
+    elif cancelled or not session_id or not SESSION_ID_RE.match(session_id):
+        target = _deep_link("pro/upgrade")
+        title, text = "Płatność przerwana", "Nic nie zostało pobrane. Możesz wrócić do aplikacji."
+    else:
+        target = _deep_link(f"pro/success?session_id={session_id}")
+        title, text = "Dziękujemy!", "Płatność przyjęta. Wracamy do aplikacji CashFlo."
+
+    href = html.escape(target, quote=True)
+    page = f"""<!doctype html>
+<html lang="pl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CashFlo</title>
+<style>
+  body {{ margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         font-family:-apple-system,system-ui,"Segoe UI",sans-serif; background:#F4F6F5; color:#14201B; }}
+  main {{ max-width:360px; padding:32px 24px; text-align:center; }}
+  h1 {{ font-size:24px; margin:0 0 8px; }}
+  p {{ color:#5B6862; line-height:1.5; margin:0 0 24px; }}
+  a {{ display:inline-block; background:#0F6B54; color:#fff; text-decoration:none;
+       padding:14px 22px; border-radius:12px; font-weight:600; }}
+</style></head>
+<body><main>
+<h1>{html.escape(title)}</h1>
+<p>{html.escape(text)}</p>
+<a href="{href}">Wróć do aplikacji</a>
+</main>
+<script>setTimeout(function(){{ window.location.href = "{href}"; }}, 400);</script>
+</body></html>"""
+    return HTMLResponse(page)
 
 
 @api_router.get("/payments/status/{session_id}", response_model=PaymentStatusResponse)
 async def get_payment_status(
-    request: Request,
     session_id: str,
     current_user: dict = Depends(get_current_user)
 ):
-    """Check payment status and activate Pro if paid"""
+    """Check a checkout session and activate Pro if it is paid."""
     if not stripe_ready():
-        raise HTTPException(status_code=503, detail="Stripe not configured")
-    
+        raise HTTPException(status_code=503, detail="Payments are not configured")
+
     user_id = str(current_user["_id"])
-    
-    # Get payment record
-    payment = await db.payment_transactions.find_one({
-        "session_id": session_id,
-        "user_id": user_id
-    })
-    
+    payment = await db.payment_transactions.find_one({"session_id": session_id, "user_id": user_id})
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
-    
-    # If already processed successfully, return cached status
-    if payment.get("payment_status") == "paid" and current_user.get("is_pro", False):
-        return PaymentStatusResponse(
-            status="complete",
-            payment_status="paid",
-            is_pro_activated=True
-        )
-    
-    # Initialize Stripe and check status
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=stripe_webhook_url(request))
-    
+    if payment.get("pro_activated"):
+        return PaymentStatusResponse(status="complete", payment_status="paid", is_pro_activated=True)
+
     try:
-        checkout_status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
-        
-        # Update payment record
-        await db.payment_transactions.update_one(
-            {"session_id": session_id},
-            {"$set": {
-                "status": checkout_status.status,
-                "payment_status": checkout_status.payment_status,
-                "updated_at": datetime.utcnow()
-            }}
-        )
-        
-        is_pro_activated = False
-        
-        # If payment successful, activate Pro
-        if checkout_status.payment_status == "paid":
-            # Check if not already processed (prevent double activation)
-            existing_activation = await db.payment_transactions.find_one({
-                "session_id": session_id,
-                "pro_activated": True
-            })
-            
-            if not existing_activation:
-                # Activate Pro for user
-                await db.users.update_one(
-                    {"_id": to_object_id(user_id, "User not found")},
-                    {"$set": {"is_pro": True, "pro_activated_at": datetime.utcnow()}}
-                )
-                
-                # Mark payment as processed
-                await db.payment_transactions.update_one(
-                    {"session_id": session_id},
-                    {"$set": {"pro_activated": True}}
-                )
-                
-                is_pro_activated = True
-                logger.info(f"Pro activated for user {user_id}")
-            else:
-                is_pro_activated = True
-        
-        return PaymentStatusResponse(
-            status=checkout_status.status,
-            payment_status=checkout_status.payment_status,
-            is_pro_activated=is_pro_activated
-        )
-        
+        session = await run_in_threadpool(stripe.checkout.Session.retrieve, session_id)
     except Exception as e:
-        logger.error(f"Error checking payment status: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Payment status error: {str(e)}")
+        logger.error(f"Error checking payment status: {e}")
+        raise HTTPException(status_code=502, detail="Could not check payment")
+
+    if sget(session, "client_reference_id") != user_id:
+        raise HTTPException(status_code=404, detail="Payment not found")
+
+    activated = await activate_pro_from_session(session)
+    if not activated:
+        await db.payment_transactions.update_one(
+            {"_id": payment["_id"]},
+            {"$set": {
+                "status": sget(session, "status", "open"),
+                "payment_status": sget(session, "payment_status", "unpaid"),
+                "updated_at": datetime.utcnow(),
+            }},
+        )
+
+    return PaymentStatusResponse(
+        status=sget(session, "status", "open"),
+        payment_status=sget(session, "payment_status", "unpaid"),
+        is_pro_activated=activated,
+    )
+
+
+class PortalRequest(BaseModel):
+    platform: Literal["native", "web"] = "native"
+    origin_url: Optional[str] = None
+
+
+@api_router.post("/payments/portal")
+async def create_billing_portal(
+    request: Request,
+    body: PortalRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    """Stripe's page where the user can change payment method or cancel the subscription."""
+    customer_id = current_user.get("stripe_customer_id")
+    if not stripe_ready() or not customer_id:
+        raise HTTPException(status_code=400, detail="No subscription to manage")
+
+    if body.platform == "web":
+        return_url = f"{_web_origin(body.origin_url)}/more"
+    else:
+        return_url = f"{public_base_url(request)}/api/payments/return?portal=1"
+
+    try:
+        portal = await run_in_threadpool(
+            stripe.billing_portal.Session.create,
+            customer=customer_id,
+            return_url=return_url,
+            locale="pl",
+        )
+    except Exception as e:
+        logger.error(f"Error opening billing portal: {e}")
+        raise HTTPException(status_code=502, detail="Could not open subscription settings")
+
+    return {"url": sget(portal, "url")}
 
 
 @api_router.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
-    """Handle Stripe webhooks.
-
-    Every event must carry a valid Stripe signature. Without a configured
-    webhook secret the endpoint refuses all events, so nobody can fake a
-    "paid" event to unlock Pro.
-    """
+    """Stripe events. Each one must carry a valid signature for STRIPE_WEBHOOK_SECRET."""
     if not stripe_ready() or not STRIPE_WEBHOOK_SECRET:
         logger.error("Stripe webhook called, but STRIPE_API_KEY / STRIPE_WEBHOOK_SECRET is not configured")
         raise HTTPException(status_code=503, detail="Stripe webhook not configured")
 
-    body = await request.body()
+    payload = await request.body()
     signature = request.headers.get("Stripe-Signature")
     if not signature:
         raise HTTPException(status_code=400, detail="Missing Stripe signature")
 
-    stripe_checkout = StripeCheckout(
-        api_key=STRIPE_API_KEY,
-        webhook_url=stripe_webhook_url(request),
-        webhook_secret=STRIPE_WEBHOOK_SECRET,
-    )
-
     try:
-        webhook_response = await stripe_checkout.handle_webhook(body, signature)
+        event = stripe.Webhook.construct_event(payload, signature, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
-        logger.error(f"Stripe webhook rejected: {str(e)}")
+        logger.warning(f"Stripe webhook rejected: {e}")
         raise HTTPException(status_code=400, detail="Invalid webhook")
 
+    event_type = sget(event, "type", "")
+    obj = sget(sget(event, "data", {}), "object", {})
+
     try:
-        logger.info(f"Webhook received: {webhook_response.event_type}")
-
-        # Handle checkout.session.completed event
-        if webhook_response.event_type == "checkout.session.completed":
-            session_id = webhook_response.session_id
-            metadata = webhook_response.metadata
-
-            if metadata and metadata.get("product") == "cashflo_pro":
-                user_id = metadata.get("user_id")
-
-                # Only activate for a checkout session this server created for this user
-                known_payment = await db.payment_transactions.find_one({
-                    "session_id": session_id,
-                    "user_id": user_id,
-                }) if user_id else None
-                if user_id and not known_payment:
-                    logger.warning(f"Webhook for unknown session {session_id}; ignored")
-
-                if known_payment and ObjectId.is_valid(user_id):
-                    # Update payment record
-                    await db.payment_transactions.update_one(
-                        {"session_id": session_id},
-                        {"$set": {
-                            "status": "complete",
-                            "payment_status": "paid",
-                            "updated_at": datetime.utcnow()
-                        }}
-                    )
-                    
-                    # Activate Pro
-                    existing_activation = await db.payment_transactions.find_one({
-                        "session_id": session_id,
-                        "pro_activated": True
-                    })
-                    
-                    if not existing_activation:
-                        await db.users.update_one(
-                            {"_id": ObjectId(user_id)},
-                            {"$set": {"is_pro": True, "pro_activated_at": datetime.utcnow()}}
-                        )
-
-                        await db.payment_transactions.update_one(
-                            {"session_id": session_id},
-                            {"$set": {"pro_activated": True}}
-                        )
-
-                        logger.info(f"Pro activated via webhook for user {user_id}")
-
-        return {"status": "ok"}
-
+        if event_type in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+            if await activate_pro_from_session(obj):
+                logger.info(f"Pro activated via webhook (session {sget(obj, 'id')})")
+        elif event_type in ("customer.subscription.updated", "customer.subscription.deleted"):
+            await sync_subscription_status(obj, deleted=event_type == "customer.subscription.deleted")
     except Exception as e:
         # Signature was valid, so answer 500 and let Stripe retry the event later
-        logger.error(f"Webhook processing error: {str(e)}")
+        logger.error(f"Webhook processing error: {e}")
         raise HTTPException(status_code=500, detail="Webhook processing error")
+
+    return {"status": "ok"}
 
 
 # ============= ADMIN ENDPOINTS =============
@@ -1441,7 +1731,10 @@ async def admin_delete_user(
     
     if user.get("is_admin"):
         raise HTTPException(status_code=400, detail="Cannot delete admin user")
-    
+
+    # Stop future charges before removing the account
+    await cancel_stripe_subscription(user)
+
     # Cascade delete
     await db.transactions.delete_many({"user_id": user_id})
     await db.goals.delete_many({"user_id": user_id})

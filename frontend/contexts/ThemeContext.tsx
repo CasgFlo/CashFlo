@@ -1,33 +1,41 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import { Appearance } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type ThemeMode = 'light' | 'dark';
 
-interface ThemeColors {
+export interface ThemeColors {
   primary: string;
   primaryLight: string;
   primaryDark: string;
+  primarySoft: string; // tinted background for primary-colored chips and icons
+  onPrimary: string; // text and icons on a primary background
   secondary: string;
-  
+  accent: string; // amber highlight (Pro, tips)
+  onAccent: string;
+
   background: string;
   surface: string;
   surfaceAlt: string;
-  
+
   text: string;
   textSecondary: string;
   textLight: string;
-  
+
   success: string;
   error: string;
   warning: string;
   info: string;
-  
+
   income: string;
   expense: string;
-  
+  incomeSoft: string;
+  expenseSoft: string;
+
   border: string;
   divider: string;
-  
+  overlay: string;
+
   categories: {
     food: string;
     transport: string;
@@ -40,79 +48,97 @@ interface ThemeColors {
   };
 }
 
+// Colors chosen for readable contrast: text and amounts on surfaces, white text on primary.
 const lightColors: ThemeColors = {
-  primary: '#2F5B4C',
-  primaryLight: '#3D7560',
-  primaryDark: '#1F3D33',
-  secondary: '#4ECDC4',
-  
-  background: '#F5F5F5',
+  primary: '#0F6B54',
+  primaryLight: '#2A8A70',
+  primaryDark: '#0A4F3E',
+  primarySoft: '#E2F0EB',
+  onPrimary: '#FFFFFF',
+  secondary: '#2A8A70',
+  accent: '#F2B53A',
+  onAccent: '#14201B',
+
+  background: '#F4F6F5',
   surface: '#FFFFFF',
-  surfaceAlt: '#FAFAFA',
-  
-  text: '#1A1A1A',
-  textSecondary: '#757575',
-  textLight: '#9E9E9E',
-  
-  success: '#4CAF50',
-  error: '#F44336',
-  warning: '#FF9800',
-  info: '#2196F3',
-  
-  income: '#4CAF50',
-  expense: '#F44336',
-  
-  border: '#E0E0E0',
-  divider: '#EEEEEE',
-  
+  surfaceAlt: '#EEF2F0',
+
+  text: '#14201B',
+  textSecondary: '#5B6862',
+  textLight: '#7D8A84',
+
+  success: '#178A55',
+  error: '#C93838',
+  warning: '#B9780F',
+  info: '#2F6FDB',
+
+  income: '#178A55',
+  expense: '#C93838',
+  incomeSoft: '#E3F3EA',
+  expenseSoft: '#FBE9E8',
+
+  border: '#E2E8E5',
+  divider: '#EDF1EF',
+  overlay: 'rgba(10, 20, 16, 0.45)',
+
   categories: {
-    food: '#FF6B6B',
-    transport: '#4ECDC4',
-    home: '#45B7D1',
-    entertainment: '#FFA07A',
-    shopping: '#98D8C8',
-    health: '#FF7F50',
-    education: '#6C5CE7',
-    other: '#95A5A6',
-  }
+    food: '#E8655A',
+    transport: '#2E9CB8',
+    home: '#4C7BD9',
+    entertainment: '#E38B3C',
+    shopping: '#9C6ADE',
+    health: '#D9577E',
+    education: '#5B67D6',
+    other: '#7D8A84',
+  },
 };
 
 const darkColors: ThemeColors = {
-  primary: '#4ECDC4',
-  primaryLight: '#6DD5CD',
-  primaryDark: '#3BA99F',
-  secondary: '#2F5B4C',
-  
-  background: '#121212',
-  surface: '#1E1E1E',
-  surfaceAlt: '#2A2A2A',
-  
-  text: '#FFFFFF',
-  textSecondary: '#B0B0B0',
-  textLight: '#808080',
-  
-  success: '#66BB6A',
-  error: '#EF5350',
-  warning: '#FFB74D',
-  info: '#42A5F5',
-  
-  income: '#66BB6A',
-  expense: '#EF5350',
-  
-  border: '#333333',
-  divider: '#2A2A2A',
-  
+  primary: '#1F8F6E',
+  primaryLight: '#3FB08D',
+  primaryDark: '#16705A',
+  primarySoft: '#16352C',
+  onPrimary: '#FFFFFF',
+  secondary: '#3FB08D',
+  accent: '#F2B53A',
+  onAccent: '#14201B',
+
+  background: '#0D1311',
+  surface: '#151D1A',
+  surfaceAlt: '#1C2622',
+
+  text: '#E7EDEA',
+  textSecondary: '#A3B0AA',
+  textLight: '#74827B',
+
+  success: '#3DBE82',
+  error: '#F06B6B',
+  warning: '#F2B53A',
+  info: '#6B9BF2',
+
+  income: '#3DBE82',
+  expense: '#F06B6B',
+  incomeSoft: '#14302A',
+  expenseSoft: '#3A1E1E',
+
+  border: '#26322D',
+  divider: '#1F2925',
+  overlay: 'rgba(0, 0, 0, 0.6)',
+
   categories: {
-    food: '#FF6B6B',
-    transport: '#4ECDC4',
-    home: '#45B7D1',
-    entertainment: '#FFA07A',
-    shopping: '#98D8C8',
-    health: '#FF7F50',
-    education: '#6C5CE7',
-    other: '#95A5A6',
-  }
+    food: '#F07A70',
+    transport: '#4DB5CF',
+    home: '#6E95E6',
+    entertainment: '#EFA05A',
+    shopping: '#B38AEA',
+    health: '#E87598',
+    education: '#7D88E6',
+    other: '#93A099',
+  },
 };
+
+// Colors for charts when a category has no color of its own
+export const chartPalette = ['#0F6B54', '#E8655A', '#2E9CB8', '#F2B53A', '#9C6ADE', '#4C7BD9', '#D9577E', '#7D8A84'];
 
 interface ThemeContextType {
   theme: ThemeMode;
@@ -124,7 +150,8 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider = ({ children }: { children: ReactNode }) => {
-  const [theme, setTheme] = useState<ThemeMode>('light');
+  // Until the user picks a theme, follow the phone's setting
+  const [theme, setTheme] = useState<ThemeMode>(Appearance.getColorScheme() === 'dark' ? 'dark' : 'light');
 
   useEffect(() => {
     loadTheme();

@@ -1,308 +1,215 @@
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '../../contexts/ThemeContext';
-import api from '../../utils/api';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { format } from 'date-fns';
+import { pl } from 'date-fns/locale';
+import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
+import api from '../../utils/api';
+import { parseAmount, sanitizeAmountInput, apiErrorMessage } from '../../utils/format';
+import { ScreenHeader, Button, space, radius, tabular } from '../../components/ui';
+
+const atNoon = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0);
 
 export default function AddGoalScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  const [loading, setLoading] = useState(false);
+  const styles = createStyles(colors);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [limitReached, setLimitReached] = useState(false);
   const [name, setName] = useState('');
   const [targetAmount, setTargetAmount] = useState('');
   const [currentAmount, setCurrentAmount] = useState('');
   const [deadline, setDeadline] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
-  const styles = createStyles(colors);
-
   const handleSubmit = async () => {
+    setError(null);
     if (!name.trim()) {
-      Alert.alert('Błąd', 'Wprowadź nazwę celu');
+      setError('Nazwij swój cel, np. „Wakacje”.');
+      return;
+    }
+    const target = parseAmount(targetAmount);
+    if (!Number.isFinite(target) || target <= 0) {
+      setError('Wpisz kwotę, którą chcesz odłożyć.');
+      return;
+    }
+    const current = currentAmount ? parseAmount(currentAmount) : 0;
+    if (!Number.isFinite(current) || current < 0) {
+      setError('Kwota początkowa jest nieprawidłowa.');
       return;
     }
 
-    const target = parseFloat(targetAmount);
-    if (isNaN(target) || target <= 0) {
-      Alert.alert('Błąd', 'Wprowadź poprawną kwotę docelową');
-      return;
-    }
-
-    const current = currentAmount ? parseFloat(currentAmount) : 0;
-    if (isNaN(current) || current < 0) {
-      Alert.alert('Błąd', 'Wprowadź poprawną kwotę bieżącą');
-      return;
-    }
-
-    setLoading(true);
+    setSaving(true);
     try {
       await api.post('/goals', {
         name: name.trim(),
         target_amount: target,
         current_amount: current,
-        deadline: deadline?.toISOString(),
+        deadline: deadline ? deadline.toISOString() : null,
       });
-
       router.back();
-      setTimeout(() => {
-        Alert.alert('✅ Sukces', 'Cel został zapisany!');
-      }, 300);
-    } catch (error: any) {
-      console.error('Error creating goal:', error);
-      if (error.response?.status === 403) {
-        Alert.alert(
-          'Limit osiągnięty',
-          'Wersja bezpłatna pozwala na 1 cel. Przejdź na wersję Pro aby mieć nieograniczoną liczbę celów!',
-          [
-            { text: 'Anuluj', style: 'cancel' },
-            { text: 'Upgrade do Pro', onPress: () => router.push('/(tabs)/more') }
-          ]
-        );
-      } else {
-        Alert.alert('Błąd', 'Nie udało się utworzyć celu');
-      }
+    } catch (e: any) {
+      if (e.response?.status === 403) setLimitReached(true);
+      setError(apiErrorMessage(e, 'Nie udało się zapisać celu. Spróbuj ponownie.'));
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
-  return (
-    <KeyboardAvoidingView
-      style={[styles.container, { paddingTop: insets.top }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView
-        contentContainerStyle={[styles.contentContainer, { paddingBottom: insets.bottom + 20 }]}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backButton}
-            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-          >
-            <Ionicons name="close" size={28} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Nowy cel</Text>
-          <View style={{ width: 44 }} />
-        </View>
+  const onPickDate = (_event: any, picked?: Date) => {
+    if (Platform.OS === 'android') setShowDatePicker(false);
+    if (picked) setDeadline(atNoon(picked));
+  };
 
-        {/* Goal Name */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Nazwa celu</Text>
+  return (
+    <KeyboardAvoidingView style={[styles.screen, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + space.xl }]} keyboardShouldPersistTaps="handled">
+        <ScreenHeader title="Nowy cel" icon="close" onBack={() => router.back()} />
+
+        <Text style={styles.label}>Na co odkładasz?</Text>
+        <TextInput
+          style={styles.textInput}
+          placeholder="np. Wakacje, poduszka finansowa, laptop"
+          value={name}
+          onChangeText={(t) => {
+            setName(t);
+            setError(null);
+          }}
+          maxLength={60}
+          autoFocus
+          placeholderTextColor={colors.textLight}
+        />
+
+        <Text style={styles.label}>Ile chcesz odłożyć?</Text>
+        <View style={styles.amountBox}>
           <TextInput
-            style={styles.textInput}
-            placeholder="np. Wakacje, Laptop, Samochód"
-            value={name}
-            onChangeText={setName}
+            style={[styles.amountInput, tabular]}
+            placeholder="0"
+            value={targetAmount}
+            onChangeText={(t) => {
+              setTargetAmount(sanitizeAmountInput(t));
+              setError(null);
+            }}
+            keyboardType="decimal-pad"
             placeholderTextColor={colors.textLight}
           />
+          <Text style={styles.currency}>zł</Text>
         </View>
 
-        {/* Target Amount */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Kwota docelowa</Text>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="0.00"
-              value={targetAmount}
-              onChangeText={setTargetAmount}
-              keyboardType="decimal-pad"
-              placeholderTextColor={colors.textLight}
-            />
-            <Text style={styles.currency}>zł</Text>
-          </View>
-        </View>
-
-        {/* Current Amount */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Kwota początkowa (opcjonalnie)</Text>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="0.00"
-              value={currentAmount}
-              onChangeText={setCurrentAmount}
-              keyboardType="decimal-pad"
-              placeholderTextColor={colors.textLight}
-            />
-            <Text style={styles.currency}>zł</Text>
-          </View>
-        </View>
-
-        {/* Deadline */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Termin (opcjonalnie)</Text>
-          <TouchableOpacity
-            style={styles.dateButton}
-            onPress={() => setShowDatePicker(true)}
-          >
-            <Ionicons name="calendar-outline" size={24} color={colors.primary} />
-            <Text style={styles.dateButtonText}>
-              {deadline
-                ? deadline.toLocaleDateString('pl-PL', {
-                    year: 'numeric',
-                    month: 'long',
-                    day: 'numeric',
-                  })
-                : 'Wybierz termin'}
-            </Text>
-            {deadline && (
-              <TouchableOpacity
-                onPress={() => setDeadline(null)}
-                style={styles.clearButton}
-              >
-                <Ionicons name="close-circle" size={20} color={colors.error} />
-              </TouchableOpacity>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {showDatePicker && (
-          <DateTimePicker
-            value={deadline || new Date()}
-            mode="date"
-            display="default"
-            minimumDate={new Date()}
-            onChange={(event, selectedDate) => {
-              setShowDatePicker(Platform.OS === 'ios');
-              if (selectedDate) {
-                setDeadline(selectedDate);
-              }
+        <Text style={styles.label}>Ile już masz? (opcjonalnie)</Text>
+        <View style={styles.amountBox}>
+          <TextInput
+            style={[styles.amountInput, tabular]}
+            placeholder="0"
+            value={currentAmount}
+            onChangeText={(t) => {
+              setCurrentAmount(sanitizeAmountInput(t));
+              setError(null);
             }}
+            keyboardType="decimal-pad"
+            placeholderTextColor={colors.textLight}
           />
-        )}
+          <Text style={styles.currency}>zł</Text>
+        </View>
 
-        {/* Submit Button */}
-        <TouchableOpacity
-          style={[styles.submitButton, loading && styles.submitButtonDisabled]}
-          onPress={handleSubmit}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.submitButtonText}>Utwórz cel</Text>
-          )}
-        </TouchableOpacity>
+        {Platform.OS !== 'web' ? (
+          <>
+            <Text style={styles.label}>Do kiedy? (opcjonalnie)</Text>
+            <TouchableOpacity style={styles.dateButton} onPress={() => setShowDatePicker(true)}>
+              <Ionicons name="calendar-outline" size={20} color={colors.primary} />
+              <Text style={styles.dateText}>{deadline ? format(deadline, 'd MMMM yyyy', { locale: pl }) : 'Wybierz termin'}</Text>
+              {deadline ? (
+                <TouchableOpacity onPress={() => setDeadline(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }} accessibilityLabel="Usuń termin">
+                  <Ionicons name="close-circle" size={20} color={colors.textLight} />
+                </TouchableOpacity>
+              ) : null}
+            </TouchableOpacity>
+          </>
+        ) : null}
+
+        {showDatePicker && Platform.OS === 'android' ? (
+          <DateTimePicker value={deadline || new Date()} mode="date" minimumDate={new Date()} onChange={onPickDate} />
+        ) : null}
+
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {limitReached ? (
+          <Button title="Zobacz CashFlo Pro" variant="secondary" icon="star" onPress={() => router.push('/pro/upgrade')} style={{ marginTop: space.md }} />
+        ) : null}
+
+        <Button title="Utwórz cel" onPress={handleSubmit} loading={saving} style={{ marginTop: space.xl }} />
       </ScrollView>
+
+      {Platform.OS === 'ios' ? (
+        <Modal visible={showDatePicker} transparent animationType="slide" onRequestClose={() => setShowDatePicker(false)}>
+          <View style={styles.overlay}>
+            <View style={[styles.sheet, { paddingBottom: insets.bottom + space.lg }]}>
+              <View style={styles.sheetHeader}>
+                <Text style={styles.sheetTitle}>Termin celu</Text>
+                <TouchableOpacity onPress={() => setShowDatePicker(false)}>
+                  <Text style={styles.sheetDone}>Gotowe</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker value={deadline || new Date()} mode="date" display="inline" minimumDate={new Date()} onChange={onPickDate} locale="pl-PL" />
+            </View>
+          </View>
+        </Modal>
+      ) : null}
     </KeyboardAvoidingView>
   );
 }
 
-const createStyles = (colors: any) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  contentContainer: {
-    padding: 16,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingTop: 8,
-  },
-  backButton: {
-    padding: 8,
-    marginLeft: -8,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  section: {
-    marginBottom: 24,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 12,
-  },
-  textInput: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    color: colors.text,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  input: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: colors.text,
-    paddingVertical: 16,
-  },
-  currency: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginLeft: 8,
-  },
-  dateButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  dateButtonText: {
-    flex: 1,
-    fontSize: 16,
-    color: colors.text,
-    marginLeft: 12,
-  },
-  clearButton: {
-    padding: 4,
-  },
-  submitButton: {
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 8,
-    marginBottom: 32,
-  },
-  submitButtonDisabled: {
-    opacity: 0.6,
-  },
-  submitButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.background },
+    content: { paddingHorizontal: space.lg },
+    label: { fontSize: 14, fontWeight: '700', color: colors.textSecondary, marginTop: space.lg, marginBottom: space.sm },
+    textInput: {
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: space.lg,
+      paddingVertical: 14,
+      fontSize: 16,
+      color: colors.text,
+    },
+    amountBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: space.lg,
+    },
+    amountInput: { flex: 1, fontSize: 24, fontWeight: '800', color: colors.text, paddingVertical: 12 },
+    currency: { fontSize: 18, fontWeight: '700', color: colors.textSecondary },
+    dateButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: space.lg,
+      minHeight: 52,
+    },
+    dateText: { flex: 1, fontSize: 16, color: colors.text, marginLeft: space.md },
+    errorText: { color: colors.error, fontSize: 14, marginTop: space.lg },
+    overlay: { flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' },
+    sheet: {
+      backgroundColor: colors.background,
+      borderTopLeftRadius: radius.lg,
+      borderTopRightRadius: radius.lg,
+      paddingHorizontal: space.lg,
+      paddingTop: space.lg,
+    },
+    sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.md },
+    sheetTitle: { fontSize: 18, fontWeight: '800', color: colors.text },
+    sheetDone: { fontSize: 16, fontWeight: '700', color: colors.primary },
+  });

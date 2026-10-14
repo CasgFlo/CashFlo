@@ -40,7 +40,8 @@ export default function TermsOfService() {
         <Text style={styles.sectionTitle}>1. Postanowienia ogólne</Text>
         <Text style={styles.paragraph}>
           Niniejszy Regulamin określa zasady korzystania z aplikacji mobilnej CashFlo 
-          (dalej "Aplikacja"), świadczonej przez CashFlo (dalej "Usługodawca").
+          (dalej "Aplikacja"), świadczonej przez Dawida Trzeciaka, kontakt: cashflo2026@gmail.com
+          (dalej "Usługodawca").
         </Text>
         <Text style={styles.paragraph}>
           Korzystanie z Aplikacji oznacza akceptację niniejszego Regulaminu w całości. 

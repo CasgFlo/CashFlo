@@ -14,8 +14,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const BRAND_GREEN = '#2F5B4C';
-const BRAND_TEAL = '#4ECDC4';
+const BRAND_GREEN = '#0F6B54';
+const BRAND_TEAL = '#2E9CB8';
 
 export default function LandingPage() {
   const router = useRouter();
@@ -45,7 +45,7 @@ export default function LandingPage() {
     <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: insets.bottom + 20 }}>
       {/* Hero Section */}
       <LinearGradient
-        colors={[BRAND_GREEN, '#1F3D33']}
+        colors={[BRAND_GREEN, '#0A4F3E']}
         style={[styles.heroSection, { paddingTop: insets.top + 20 }]}
       >
         {/* Header */}
@@ -189,7 +189,7 @@ export default function LandingPage() {
             </View>
             <TouchableOpacity 
               style={styles.planButtonSecondary} 
-              onPress={() => Linking.openURL('https://buy.stripe.com/cNi7sM5tM7RZd9K4tj2B202')}
+              onPress={handleGetStarted}
             >
               <Text style={styles.planButtonSecondaryText}>Wybierz</Text>
             </TouchableOpacity>
@@ -222,7 +222,7 @@ export default function LandingPage() {
             </View>
             <TouchableOpacity 
               style={styles.planButtonPrimary} 
-              onPress={() => Linking.openURL('https://buy.stripe.com/dRmfZi1dwb4b9XybVL2B200')}
+              onPress={handleGetStarted}
             >
               <Text style={styles.planButtonPrimaryText}>Wybierz Roczny</Text>
             </TouchableOpacity>
@@ -255,7 +255,7 @@ export default function LandingPage() {
             </View>
             <TouchableOpacity 
               style={[styles.planButtonSecondary, { borderColor: BRAND_GREEN }]} 
-              onPress={() => Linking.openURL('https://buy.stripe.com/eVqaEY1dwfkr6Lmf7X2B201')}
+              onPress={handleGetStarted}
             >
               <Text style={styles.planButtonSecondaryText}>Kup na zawsze</Text>
             </TouchableOpacity>

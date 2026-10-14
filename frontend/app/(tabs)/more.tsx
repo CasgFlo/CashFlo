@@ -1,401 +1,250 @@
-import React from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  Alert,
-  Switch,
-} from 'react-native';
-import { useRouter } from 'expo-router';
+import React, { useCallback, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch, ActivityIndicator } from 'react-native';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../contexts/ThemeContext';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Constants from 'expo-constants';
+import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { LargeTitle, Card, space, radius } from '../../components/ui';
+import { confirmAction, showMessage } from '../../utils/confirm';
+import { openSubscriptionPortal, PLAN_NAMES, ProPlan } from '../../utils/payments';
+import { apiErrorMessage } from '../../utils/format';
+
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
 export default function MoreScreen() {
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { colors, isDark, toggleTheme } = useTheme();
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
+  const [portalBusy, setPortalBusy] = useState(false);
+  const styles = createStyles(colors);
+  const version = Constants.expoConfig?.version || '1.0.0';
+
+  // Pick up Pro changes (e.g. after managing the subscription in the browser)
+  useFocusEffect(
+    useCallback(() => {
+      refreshUser();
+    }, [])
+  );
 
   const handleLogout = () => {
-    Alert.alert('Wyloguj', 'Czy na pewno chcesz się wylogować?', [
-      { text: 'Anuluj', style: 'cancel' },
-      {
-        text: 'Wyloguj',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/auth/login');
-        },
-      },
-    ]);
+    confirmAction('Wyloguj się', 'Czy na pewno chcesz się wylogować?', 'Wyloguj', async () => {
+      await logout();
+      router.replace('/auth/login');
+    });
   };
 
-  const styles = createStyles(colors);
+  const manageSubscription = async () => {
+    setPortalBusy(true);
+    try {
+      await openSubscriptionPortal();
+      await refreshUser();
+    } catch (error) {
+      showMessage('Błąd', apiErrorMessage(error, 'Nie udało się otworzyć ustawień subskrypcji.'));
+    } finally {
+      setPortalBusy(false);
+    }
+  };
 
-  const menuItems = [
-    {
-      icon: 'wallet-outline',
-      title: 'Budżet',
-      subtitle: 'Ustaw limit wydatków',
-      onPress: () => router.push('/budget/settings'),
-      color: colors.primary,
-    },
-    {
-      icon: 'pricetag-outline',
-      title: 'Kategorie',
-      subtitle: 'Zarządzaj kategoriami',
-      onPress: () => router.push('/categories/manage'),
-      color: colors.info,
-    },
-    {
-      icon: 'star',
-      title: 'CashFlo Pro',
-      subtitle: user?.is_pro ? 'Aktywne' : 'Odblokuj więcej funkcji',
-      onPress: () => router.push('/pro/upgrade'),
-      color: colors.warning,
-      badge: user?.is_pro ? 'PRO' : null,
-      highlight: !user?.is_pro,
-    },
-    ...(user?.is_admin
-      ? [
-          {
-            icon: 'shield-checkmark',
-            title: 'Panel Administratora',
-            subtitle: 'Statystyki, użytkownicy, zarządzanie',
-            onPress: () => router.push('/admin'),
-            color: '#9333EA',
-            badge: 'ADMIN',
-          },
-        ]
-      : []),
-  ];
+  const Row = ({
+    icon,
+    title,
+    subtitle,
+    onPress,
+    right,
+    first,
+    tint,
+  }: {
+    icon: IconName;
+    title: string;
+    subtitle?: string;
+    onPress?: () => void;
+    right?: React.ReactNode;
+    first?: boolean;
+    tint?: string;
+  }) => (
+    <TouchableOpacity
+      style={[styles.row, !first && styles.rowDivider]}
+      onPress={onPress}
+      disabled={!onPress}
+      activeOpacity={0.7}
+    >
+      <View style={[styles.rowIcon, { backgroundColor: (tint || colors.primary) + '1A' }]}>
+        <Ionicons name={icon} size={18} color={tint || colors.primary} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.rowTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.rowSubtitle}>{subtitle}</Text> : null}
+      </View>
+      {right !== undefined ? right : onPress ? <Ionicons name="chevron-forward" size={18} color={colors.textLight} /> : null}
+    </TouchableOpacity>
+  );
 
-  const settingsItems = [
-    {
-      icon: 'help-circle-outline',
-      title: 'Pomoc i wsparcie',
-      onPress: () => router.push('/support/contact'),
-    },
-    {
-      icon: 'document-text-outline',
-      title: 'Regulamin',
-      onPress: () => router.push('/terms'),
-    },
-    {
-      icon: 'shield-checkmark-outline',
-      title: 'Polityka Prywatności',
-      onPress: () => router.push('/privacy'),
-    },
-    {
-      icon: 'information-circle-outline',
-      title: 'O aplikacji',
-      onPress: () => Alert.alert('CashFlo', 'Wersja 1.0.0\n\nAplikacja do zarządzania finansami osobistymi'),
-    },
-  ];
+  const initial = (user?.name || user?.email || '?').trim().charAt(0).toUpperCase();
+  const plan = user?.pro_plan as ProPlan | null | undefined;
+  const proSubtitle = user?.is_pro
+    ? plan === 'lifetime'
+      ? 'Aktywne na zawsze'
+      : plan
+      ? `Aktywne · plan ${PLAN_NAMES[plan]}`
+      : 'Aktywne'
+    : 'Nieograniczone cele i kategorie';
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      {/* Profile Card */}
-      <View style={styles.profileCard}>
+    <ScrollView style={styles.screen} contentContainerStyle={[styles.content, { paddingTop: insets.top + space.sm }]}>
+      <LargeTitle title="Więcej" />
+
+      {/* Profile */}
+      <Card style={styles.profile}>
         <View style={styles.avatar}>
-          <Ionicons name="person" size={36} color="#fff" />
+          <Text style={styles.avatarText}>{initial}</Text>
         </View>
-        <Text style={styles.userName}>{user?.name}</Text>
-        <Text style={styles.userEmail}>{user?.email}</Text>
-        {user?.is_pro && (
-          <View style={styles.proBadgeContainer}>
-            <Ionicons name="star" size={14} color="#fff" />
-            <Text style={styles.proBadgeText}>PRO</Text>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.name} numberOfLines={1}>{user?.name}</Text>
+          <Text style={styles.email} numberOfLines={1}>{user?.email}</Text>
+        </View>
+        {user?.is_pro ? (
+          <View style={styles.proPill}>
+            <Ionicons name="star" size={11} color={colors.onAccent} />
+            <Text style={styles.proPillText}>PRO</Text>
           </View>
-        )}
-      </View>
+        ) : null}
+      </Card>
 
-      {/* Dark Mode Toggle */}
-      <View style={styles.themeCard}>
-        <View style={styles.themeLeft}>
-          <View style={[styles.themeIcon, { backgroundColor: isDark ? colors.primary + '30' : colors.text + '15' }]}>
-            <Ionicons name={isDark ? 'moon' : 'sunny'} size={24} color={isDark ? colors.primary : colors.warning} />
-          </View>
-          <View style={styles.themeTextContainer}>
-            <Text style={styles.themeTitle}>Tryb ciemny</Text>
-            <Text style={styles.themeSubtitle}>{isDark ? 'Włączony' : 'Wyłączony'}</Text>
-          </View>
-        </View>
-        <Switch
-          value={isDark}
-          onValueChange={toggleTheme}
-          trackColor={{ false: colors.border, true: colors.primary }}
-          thumbColor="#fff"
+      {/* Pro */}
+      <Card style={[styles.group, !user?.is_pro && { borderColor: colors.accent }]}>
+        <Row icon="star" tint={colors.warning} title="CashFlo Pro" subtitle={proSubtitle} onPress={() => router.push('/pro/upgrade')} first />
+        {user?.can_manage_subscription ? (
+          <Row
+            icon="card-outline"
+            title="Zarządzaj subskrypcją"
+            subtitle="Zmień kartę albo anuluj"
+            onPress={manageSubscription}
+            right={portalBusy ? <ActivityIndicator color={colors.primary} /> : undefined}
+          />
+        ) : null}
+      </Card>
+
+      <Text style={styles.groupLabel}>Finanse</Text>
+      <Card style={styles.group}>
+        <Row icon="wallet-outline" title="Budżet miesięczny" onPress={() => router.push('/budget/settings')} first />
+        <Row icon="pricetags-outline" title="Kategorie" onPress={() => router.push('/categories/manage')} />
+      </Card>
+
+      <Text style={styles.groupLabel}>Wygląd</Text>
+      <Card style={styles.group}>
+        <Row
+          icon={isDark ? 'moon' : 'sunny-outline'}
+          title="Tryb ciemny"
+          first
+          onPress={toggleTheme}
+          right={
+            <Switch
+              value={isDark}
+              onValueChange={toggleTheme}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor="#FFFFFF"
+            />
+          }
         />
-      </View>
+      </Card>
 
-      {/* Menu Items */}
-      <View style={styles.section}>
-        {menuItems.map((item, index) => (
-          <TouchableOpacity
-            key={index}
-            style={[
-              styles.menuItem,
-              item.highlight && styles.menuItemHighlight,
-            ]}
-            onPress={item.onPress}
-          >
-            <View style={[styles.menuIcon, { backgroundColor: item.color + '20' }]}>
-              <Ionicons name={item.icon as any} size={24} color={item.color} />
-            </View>
-            <View style={styles.menuContent}>
-              <Text style={styles.menuTitle}>{item.title}</Text>
-              <Text style={styles.menuSubtitle}>{item.subtitle}</Text>
-            </View>
-            {item.badge && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{item.badge}</Text>
-              </View>
-            )}
-            <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-          </TouchableOpacity>
-        ))}
-      </View>
+      <Text style={styles.groupLabel}>Pomoc</Text>
+      <Card style={styles.group}>
+        <Row icon="help-circle-outline" title="Pomoc i kontakt" onPress={() => router.push('/support/contact')} first />
+        <Row icon="document-text-outline" title="Regulamin" onPress={() => router.push('/terms')} />
+        <Row icon="shield-checkmark-outline" title="Polityka prywatności" onPress={() => router.push('/privacy')} />
+      </Card>
 
-      {/* Settings */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Ustawienia</Text>
-        {settingsItems.map((item, index) => (
-          <TouchableOpacity
-            key={index}
-            style={styles.settingsItem}
-            onPress={item.onPress}
-          >
-            <Ionicons name={item.icon as any} size={24} color={colors.textSecondary} />
-            <Text style={styles.settingsTitle}>{item.title}</Text>
-            <Ionicons name="chevron-forward" size={20} color={colors.textLight} />
-          </TouchableOpacity>
-        ))}
-      </View>
+      {user?.is_admin ? (
+        <>
+          <Text style={styles.groupLabel}>Administracja</Text>
+          <Card style={styles.group}>
+            <Row icon="stats-chart-outline" tint={colors.info} title="Panel administratora" subtitle="Statystyki i użytkownicy" onPress={() => router.push('/admin')} first />
+          </Card>
+        </>
+      ) : null}
 
-      {/* Logout Button */}
-      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-        <Ionicons name="log-out-outline" size={24} color={colors.error} />
+      <TouchableOpacity style={styles.logout} onPress={handleLogout}>
+        <Ionicons name="log-out-outline" size={20} color={colors.error} />
         <Text style={styles.logoutText}>Wyloguj się</Text>
       </TouchableOpacity>
 
       {/* Delete account (required by the App Store and GDPR) */}
-      <TouchableOpacity style={styles.deleteAccountButton} onPress={() => router.push('/account/delete')}>
+      <TouchableOpacity style={styles.deleteAccount} onPress={() => router.push('/account/delete')}>
         <Text style={styles.deleteAccountText}>Usuń konto</Text>
       </TouchableOpacity>
 
-      {/* Bottom padding */}
-      <View style={{ height: 30 }} />
+      <Text style={styles.version}>CashFlo {version}</Text>
     </ScrollView>
   );
 }
 
-const createStyles = (colors: any) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  contentContainer: {
-    padding: 16,
-  },
-  profileCard: {
-    backgroundColor: colors.surface,
-    borderRadius: 20,
-    padding: 28,
-    alignItems: 'center',
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  avatar: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  userName: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: colors.text,
-    marginBottom: 4,
-  },
-  userEmail: {
-    fontSize: 14,
-    color: colors.textSecondary,
-  },
-  proBadgeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.warning,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    marginTop: 12,
-  },
-  proBadgeText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginLeft: 4,
-  },
-  themeCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  themeLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  themeIcon: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  themeTextContainer: {
-    flex: 1,
-  },
-  themeTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  themeSubtitle: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  section: {
-    marginBottom: 20,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 12,
-    marginLeft: 4,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 10,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  menuItemHighlight: {
-    borderWidth: 2,
-    borderColor: colors.warning,
-    backgroundColor: colors.warning + '08',
-  },
-  menuIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  menuContent: {
-    flex: 1,
-  },
-  menuTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  menuSubtitle: {
-    fontSize: 12,
-    color: colors.textSecondary,
-    marginTop: 3,
-  },
-  badge: {
-    backgroundColor: colors.warning,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 10,
-    marginRight: 8,
-  },
-  badgeText: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  settingsItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.04,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  settingsTitle: {
-    flex: 1,
-    fontSize: 16,
-    color: colors.text,
-    marginLeft: 14,
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surface,
-    padding: 18,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: colors.error,
-    marginTop: 8,
-  },
-  logoutText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.error,
-    marginLeft: 10,
-  },
-  deleteAccountButton: {
-    alignItems: 'center',
-    padding: 14,
-    marginTop: 12,
-  },
-  deleteAccountText: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    textDecorationLine: 'underline',
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.background },
+    content: { paddingHorizontal: space.lg, paddingBottom: space.xxl },
+    profile: { flexDirection: 'row', alignItems: 'center' },
+    avatar: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      backgroundColor: colors.primary,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: space.md,
+    },
+    avatarText: { fontSize: 22, fontWeight: '800', color: colors.onPrimary },
+    name: { fontSize: 17, fontWeight: '700', color: colors.text },
+    email: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
+    proPill: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.accent,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      borderRadius: radius.pill,
+      marginLeft: space.sm,
+    },
+    proPillText: { fontSize: 11, fontWeight: '800', color: colors.onAccent, marginLeft: 3 },
+    group: { paddingVertical: 2, paddingHorizontal: space.lg },
+    groupLabel: {
+      fontSize: 12,
+      fontWeight: '700',
+      color: colors.textLight,
+      textTransform: 'uppercase',
+      letterSpacing: 0.6,
+      marginTop: space.md,
+      marginBottom: space.sm,
+      marginLeft: space.xs,
+    },
+    row: { flexDirection: 'row', alignItems: 'center', minHeight: 56, paddingVertical: space.sm },
+    rowDivider: { borderTopWidth: 1, borderTopColor: colors.divider },
+    rowIcon: {
+      width: 34,
+      height: 34,
+      borderRadius: 10,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: space.md,
+    },
+    rowTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
+    rowSubtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 1 },
+    logout: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: 52,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      marginTop: space.xl,
+    },
+    logoutText: { fontSize: 16, fontWeight: '700', color: colors.error, marginLeft: space.sm },
+    deleteAccount: { alignItems: 'center', padding: space.md, marginTop: space.sm },
+    deleteAccountText: { fontSize: 14, color: colors.textSecondary, textDecorationLine: 'underline' },
+    version: { fontSize: 12, color: colors.textLight, textAlign: 'center', marginTop: space.xs },
+  });

@@ -16,6 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { ScreenHeader } from '../../components/ui';
 
 export default function DeleteAccountScreen() {
   const router = useRouter();
@@ -50,18 +51,7 @@ export default function DeleteAccountScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.contentContainer} keyboardShouldPersistTaps="handled">
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backButton}
-            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-            accessibilityLabel="Wróć"
-          >
-            <Ionicons name="arrow-back" size={28} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Usuń konto</Text>
-          <View style={{ width: 44 }} />
-        </View>
+        <ScreenHeader title="Usuń konto" onBack={() => router.back()} />
 
         <View style={styles.warningCard}>
           <Ionicons name="warning" size={28} color={colors.error} />
@@ -70,6 +60,7 @@ export default function DeleteAccountScreen() {
             <Text style={styles.warningText}>
               Usuniemy konto {user?.email} oraz wszystkie zapisane w nim dane: transakcje,
               kategorie, budżet i cele oszczędnościowe.
+              {user?.can_manage_subscription ? ' Twoja subskrypcja Pro zostanie anulowana, więc nie pobierzemy kolejnych opłat.' : ''}
             </Text>
           </View>
         </View>

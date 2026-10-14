@@ -40,7 +40,7 @@ function WebFrameStyles() {
         margin: 0;
       }
       body {
-        background: #E8E4DC;
+        background: #E4E9E6;
       }
       @media (prefers-color-scheme: dark) {
         body { background: #0A0A0A; }
@@ -54,7 +54,7 @@ function WebFrameStyles() {
           box-shadow: 0 8px 32px rgba(0,0,0,0.18);
           overflow: hidden;
           position: relative !important;
-          background: #F5F5F5;
+          background: #F4F6F5;
         }
         /* Ensure inner absolutely-positioned Stack respects the frame */
         #root > div > div { position: relative; }

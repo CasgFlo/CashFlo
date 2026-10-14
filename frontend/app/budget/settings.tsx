@@ -1,33 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  ScrollView,
-  KeyboardAvoidingView,
-  Platform,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { View, Text, StyleSheet, TextInput, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '../../contexts/ThemeContext';
+import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import api from '../../utils/api';
 import { Budget } from '../../utils/types';
+import { formatCurrency, parseAmount, sanitizeAmountInput, apiErrorMessage } from '../../utils/format';
+import { ScreenHeader, Card, Button, ProgressBar, space, radius, tabular } from '../../components/ui';
 
 export default function BudgetSettingsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
+  const styles = createStyles(colors);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [monthlyLimit, setMonthlyLimit] = useState('');
   const [budget, setBudget] = useState<Budget | null>(null);
-
-  const styles = createStyles(colors);
 
   useEffect(() => {
     loadBudget();
@@ -37,296 +27,107 @@ export default function BudgetSettingsScreen() {
     try {
       const response = await api.get('/budget');
       setBudget(response.data);
-      setMonthlyLimit(response.data.monthly_limit.toString());
-    } catch (error: any) {
-      // Budget doesn't exist yet
-      console.log('No budget found');
+      if (response.data.monthly_limit > 0) {
+        setMonthlyLimit(response.data.monthly_limit.toFixed(2).replace('.', ',').replace(/,00$/, ''));
+      }
+    } catch {
+      // No budget yet
     } finally {
       setLoading(false);
     }
   };
 
   const handleSave = async () => {
-    const limit = parseFloat(monthlyLimit);
-    if (isNaN(limit) || limit <= 0) {
-      Alert.alert('Błąd', 'Wprowadź poprawną kwotę');
+    const limit = parseAmount(monthlyLimit);
+    if (!Number.isFinite(limit) || limit <= 0) {
+      setError('Wpisz kwotę, np. 3000.');
       return;
     }
-
+    setError(null);
     setSaving(true);
     try {
-      await api.post('/budget', {
-        monthly_limit: limit,
-        category_limits: budget?.category_limits || {},
-      });
-
-      // Success - close screen and show message
+      await api.post('/budget', { monthly_limit: limit, category_limits: budget?.category_limits || {} });
       router.back();
-      setTimeout(() => {
-        Alert.alert('✅ Sukces', 'Budżet został zapisany!');
-      }, 300);
-    } catch (error: any) {
-      console.error('Error saving budget:', error);
-      Alert.alert('Błąd', 'Nie udało się zapisać budżetu');
+    } catch (e) {
+      setError(apiErrorMessage(e, 'Nie udało się zapisać budżetu. Spróbuj ponownie.'));
     } finally {
       setSaving(false);
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return `${amount.toFixed(2)} zł`;
-  };
-
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={[styles.screen, { alignItems: 'center', justifyContent: 'center' }]}>
         <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
 
+  const used = budget && budget.monthly_limit > 0 ? budget.current_month_spending / budget.monthly_limit : 0;
+
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { paddingTop: insets.top }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.contentContainer}>
-        {/* Header */}
-        <View style={styles.header}>
-          <TouchableOpacity
-            onPress={() => router.back()}
-            style={styles.backButton}
-            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-          >
-            <Ionicons name="arrow-back" size={28} color={colors.text} />
-          </TouchableOpacity>
-          <Text style={styles.headerTitle}>Budżet miesięczny</Text>
-          <View style={{ width: 44 }} />
+    <KeyboardAvoidingView style={[styles.screen, { paddingTop: insets.top }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + space.xl }]} keyboardShouldPersistTaps="handled">
+        <ScreenHeader title="Budżet miesięczny" onBack={() => router.back()} />
+
+        <Text style={styles.intro}>
+          Ustal, ile chcesz wydawać miesięcznie. Na ekranie głównym zobaczysz, ile zostało do końca miesiąca.
+        </Text>
+
+        {budget && budget.monthly_limit > 0 ? (
+          <Card>
+            <Text style={styles.cardLabel}>Ten miesiąc</Text>
+            <Text style={[styles.spent, tabular]}>
+              {formatCurrency(budget.current_month_spending)}
+              <Text style={styles.of}> z {formatCurrency(budget.monthly_limit)}</Text>
+            </Text>
+            <ProgressBar value={used} color={used > 0.9 ? colors.error : used > 0.7 ? colors.warning : colors.primary} />
+          </Card>
+        ) : null}
+
+        <Text style={styles.label}>Miesięczny limit wydatków</Text>
+        <View style={styles.amountBox}>
+          <TextInput
+            style={[styles.amountInput, tabular]}
+            placeholder="0"
+            value={monthlyLimit}
+            onChangeText={(t) => {
+              setMonthlyLimit(sanitizeAmountInput(t));
+              setError(null);
+            }}
+            keyboardType="decimal-pad"
+            autoFocus={!budget}
+            placeholderTextColor={colors.textLight}
+          />
+          <Text style={styles.currency}>zł</Text>
         </View>
 
-        {/* Info Card */}
-        <View style={styles.infoCard}>
-          <Ionicons name="information-circle" size={24} color={colors.info} />
-          <Text style={styles.infoText}>
-            Ustaw miesięczny limit wydatków, aby lepiej kontrolować swoje finanse
-          </Text>
-        </View>
-
-        {/* Current Spending */}
-        {budget && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Aktualny miesiąc</Text>
-            <View style={styles.spendingRow}>
-              <Text style={styles.spendingLabel}>Wydano:</Text>
-              <Text style={[styles.spendingAmount, { color: colors.expense }]}>
-                {formatCurrency(budget.current_month_spending)}
-              </Text>
-            </View>
-            {budget.monthly_limit > 0 && (
-              <>
-                <View style={styles.spendingRow}>
-                  <Text style={styles.spendingLabel}>Limit:</Text>
-                  <Text style={styles.spendingAmount}>
-                    {formatCurrency(budget.monthly_limit)}
-                  </Text>
-                </View>
-                <View style={styles.progressBar}>
-                  <View
-                    style={[
-                      styles.progressFill,
-                      {
-                        width: `${Math.min(
-                          (budget.current_month_spending / budget.monthly_limit) * 100,
-                          100
-                        )}%`,
-                        backgroundColor:
-                          budget.current_month_spending / budget.monthly_limit > 0.9
-                            ? colors.error
-                            : budget.current_month_spending / budget.monthly_limit > 0.7
-                            ? colors.warning
-                            : colors.success,
-                      },
-                    ]}
-                  />
-                </View>
-              </>
-            )}
-          </View>
-        )}
-
-        {/* Budget Input */}
-        <View style={styles.section}>
-          <Text style={styles.label}>Miesięczny limit wydatków</Text>
-          <View style={styles.inputContainer}>
-            <TextInput
-              style={styles.input}
-              placeholder="0.00"
-              value={monthlyLimit}
-              onChangeText={setMonthlyLimit}
-              keyboardType="decimal-pad"
-              placeholderTextColor={colors.textLight}
-            />
-            <Text style={styles.currency}>zł</Text>
-          </View>
-          <Text style={styles.hint}>
-            Otrzymasz powiadomienie gdy zbliżysz się do limitu
-          </Text>
-        </View>
-
-        {/* Save Button */}
-        <TouchableOpacity
-          style={[styles.saveButton, saving && styles.saveButtonDisabled]}
-          onPress={handleSave}
-          disabled={saving}
-        >
-          {saving ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <>
-              <Ionicons name="checkmark-circle" size={24} color="#fff" />
-              <Text style={styles.saveButtonText}>Zapisz budżet</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        <Button title="Zapisz budżet" onPress={handleSave} loading={saving} style={{ marginTop: space.xl }} />
       </ScrollView>
     </KeyboardAvoidingView>
   );
 }
 
-const createStyles = (colors: any) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  contentContainer: {
-    padding: 16,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingTop: 8,
-  },
-  backButton: {
-    padding: 8,
-    marginLeft: -8,
-  },
-  headerTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  infoCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.info + '20',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 24,
-  },
-  infoText: {
-    flex: 1,
-    fontSize: 14,
-    color: colors.text,
-    marginLeft: 12,
-    lineHeight: 20,
-  },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 24,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 16,
-  },
-  spendingRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  spendingLabel: {
-    fontSize: 16,
-    color: colors.textSecondary,
-  },
-  spendingAmount: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  progressBar: {
-    height: 8,
-    backgroundColor: colors.border,
-    borderRadius: 4,
-    overflow: 'hidden',
-    marginTop: 4,
-  },
-  progressFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  section: {
-    marginBottom: 32,
-  },
-  label: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-    marginBottom: 12,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  input: {
-    flex: 1,
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: colors.text,
-    paddingVertical: 16,
-    outlineStyle: 'none' as any,
-  },
-  currency: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginLeft: 8,
-  },
-  hint: {
-    fontSize: 12,
-    color: colors.textLight,
-    marginTop: 8,
-  },
-  saveButton: {
-    flexDirection: 'row',
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    padding: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  saveButtonDisabled: {
-    opacity: 0.6,
-  },
-  saveButtonText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginLeft: 8,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.background },
+    content: { paddingHorizontal: space.lg },
+    intro: { fontSize: 15, color: colors.textSecondary, lineHeight: 21, marginBottom: space.lg },
+    cardLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
+    spent: { fontSize: 22, fontWeight: '800', color: colors.text, marginTop: 4, marginBottom: space.md },
+    of: { fontSize: 14, fontWeight: '500', color: colors.textSecondary },
+    label: { fontSize: 14, fontWeight: '700', color: colors.textSecondary, marginTop: space.md, marginBottom: space.sm },
+    amountBox: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      backgroundColor: colors.surface,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      paddingHorizontal: space.lg,
+    },
+    amountInput: { flex: 1, fontSize: 28, fontWeight: '800', color: colors.text, paddingVertical: 12 },
+    currency: { fontSize: 20, fontWeight: '700', color: colors.textSecondary },
+    errorText: { color: colors.error, fontSize: 14, marginTop: space.md },
+  });

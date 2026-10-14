@@ -45,7 +45,7 @@ export default function PrivacyPolicy() {
 
         <Text style={styles.sectionTitle}>1. Administrator danych</Text>
         <Text style={styles.paragraph}>
-          Administratorem Twoich danych osobowych jest CashFlo z siedzibą w Polsce.
+          Administratorem Twoich danych osobowych jest Dawid Trzeciak, twórca aplikacji CashFlo.
         </Text>
         <Text style={styles.paragraph}>
           Kontakt w sprawach związanych z ochroną danych: cashflo2026@gmail.com
@@ -117,7 +117,28 @@ export default function PrivacyPolicy() {
           Aby skorzystać z tych praw, skontaktuj się z nami: cashflo2026@gmail.com
         </Text>
 
-        <Text style={styles.sectionTitle}>9. Kontakt</Text>
+        <Text style={styles.sectionTitle}>9. Pliki cookies</Text>
+        <Text style={styles.paragraph}>
+          Aplikacja mobilna CashFlo nie wykorzystuje plików cookies.
+          Strona internetowa może wykorzystywać cookies w celach analitycznych
+          i funkcjonalnych.
+        </Text>
+
+        <Text style={styles.sectionTitle}>10. Przekazywanie danych poza EOG</Text>
+        <Text style={styles.paragraph}>
+          Twoje dane mogą być przekazywane do dostawców usług znajdujących się
+          poza Europejskim Obszarem Gospodarczym. W takich przypadkach stosujemy
+          odpowiednie zabezpieczenia, takie jak standardowe klauzule umowne
+          zatwierdzone przez Komisję Europejską.
+        </Text>
+
+        <Text style={styles.sectionTitle}>11. Zmiany Polityki Prywatności</Text>
+        <Text style={styles.paragraph}>
+          Możemy aktualizować niniejszą Politykę Prywatności. O istotnych zmianach
+          poinformujemy Cię za pośrednictwem aplikacji lub e-mail.
+        </Text>
+
+        <Text style={styles.sectionTitle}>12. Kontakt</Text>
         <Text style={styles.paragraph}>
           W sprawach związanych z ochroną danych osobowych prosimy o kontakt:
         </Text>

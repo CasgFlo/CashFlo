@@ -2,112 +2,65 @@ import React from 'react';
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../../contexts/ThemeContext';
 
-// Fallback colors in case context is not available yet
-const fallbackColors = {
-  primary: '#2F5B4C',
-  textLight: '#9E9E9E',
-  surface: '#FFFFFF',
-  border: '#E0E0E0',
-  text: '#1A1A1A',
-};
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+function tabIcon(active: IconName, inactive: IconName) {
+  return ({ color, focused }: { color: string; focused: boolean }) => (
+    <Ionicons name={focused ? active : inactive} size={24} color={color} />
+  );
+}
 
 export default function TabLayout() {
-  let colors = fallbackColors;
-  let isDark = false;
-  
-  try {
-    const themeContext = useTheme();
-    colors = themeContext.colors;
-    isDark = themeContext.isDark;
-  } catch (e) {
-    // Use fallback colors
-  }
-  
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  const bottomPadding = Math.max(insets.bottom, Platform.OS === 'web' ? 8 : 10);
+
   return (
     <Tabs
       screenOptions={{
+        // Every tab draws its own large title, so the native header is hidden
+        headerShown: false,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textLight,
         tabBarStyle: {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: Platform.OS === 'ios' ? 88 : 70,
-          paddingBottom: Platform.OS === 'ios' ? 28 : 12,
-          paddingTop: 8,
-          elevation: 8,
-          shadowColor: '#000',
-          shadowOffset: { width: 0, height: -2 },
-          shadowOpacity: 0.1,
-          shadowRadius: 4,
+          height: 58 + bottomPadding,
+          paddingBottom: bottomPadding,
+          paddingTop: 6,
+          elevation: 0,
+          shadowOpacity: 0,
         },
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: '600',
-          marginTop: 2,
         },
-        tabBarIconStyle: {
-          marginTop: 4,
-        },
-        headerStyle: {
-          backgroundColor: isDark ? colors.surface : colors.primary,
-          elevation: 0,
-          shadowOpacity: 0,
-        },
-        headerTintColor: isDark ? colors.text : '#fff',
-        headerTitleStyle: {
-          fontWeight: 'bold',
-          fontSize: 18,
-        },
+        sceneStyle: { backgroundColor: colors.background },
       }}
     >
       <Tabs.Screen
         name="index"
-        options={{
-          title: 'Główna',
-          headerShown: false,
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home" size={size} color={color} />
-          ),
-        }}
+        options={{ title: 'Główna', tabBarIcon: tabIcon('home', 'home-outline') }}
       />
       <Tabs.Screen
         name="transactions"
-        options={{
-          title: 'Transakcje',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list" size={size} color={color} />
-          ),
-        }}
+        options={{ title: 'Transakcje', tabBarIcon: tabIcon('list', 'list-outline') }}
       />
       <Tabs.Screen
         name="stats"
-        options={{
-          title: 'Statystyki',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bar-chart" size={size} color={color} />
-          ),
-        }}
+        options={{ title: 'Statystyki', tabBarIcon: tabIcon('pie-chart', 'pie-chart-outline') }}
       />
       <Tabs.Screen
         name="goals"
-        options={{
-          title: 'Cele',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="flag" size={size} color={color} />
-          ),
-        }}
+        options={{ title: 'Cele', tabBarIcon: tabIcon('flag', 'flag-outline') }}
       />
       <Tabs.Screen
         name="more"
-        options={{
-          title: 'Więcej',
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="menu" size={size} color={color} />
-          ),
-        }}
+        options={{ title: 'Więcej', tabBarIcon: tabIcon('person-circle', 'person-circle-outline') }}
       />
     </Tabs>
   );

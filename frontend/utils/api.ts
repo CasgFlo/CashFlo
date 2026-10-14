@@ -12,6 +12,13 @@ const api = axios.create({
   },
 });
 
+// AuthContext registers this so an expired session signs the user out
+// and sends them back to the login screen.
+let onUnauthorized: (() => void) | null = null;
+export const setUnauthorizedHandler = (handler: (() => void) | null) => {
+  onUnauthorized = handler;
+};
+
 // Add token to requests
 api.interceptors.request.use(
   async (config) => {
@@ -30,10 +37,11 @@ api.interceptors.request.use(
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
-      // Token expired or invalid
+    const hadToken = !!error.config?.headers?.Authorization;
+    if (error.response?.status === 401 && hadToken) {
+      // Session expired, password changed or account removed
       await AsyncStorage.removeItem('authToken');
-      // You can add navigation to login here if needed
+      onUnauthorized?.();
     }
     return Promise.reject(error);
   }

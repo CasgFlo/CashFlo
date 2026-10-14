@@ -1,277 +1,239 @@
-import React, { useState, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  FlatList,
-  TouchableOpacity,
-  RefreshControl,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import React, { useState, useCallback, useMemo } from 'react';
+import { View, Text, StyleSheet, SectionList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../../contexts/ThemeContext';
-import api from '../../utils/api';
-import { Transaction } from '../../utils/types';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { format } from 'date-fns';
-import { pl } from 'date-fns/locale';
+import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
+import api from '../../utils/api';
+import { Transaction, Category } from '../../utils/types';
+import { formatCurrency, formatDayLabel, parseServerDate } from '../../utils/format';
+import { makeCategoryLookup } from '../../utils/categories';
+import { LargeTitle, SegmentedControl, TransactionRow, Fab, EmptyState, tabular, space, radius } from '../../components/ui';
+
+const PAGE_SIZE = 50;
+type Filter = 'all' | 'expense' | 'income';
+
+interface DaySection {
+  key: string;
+  title: string;
+  net: number;
+  data: Transaction[];
+}
 
 export default function TransactionsScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [filter, setFilter] = useState<Filter>('all');
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
 
   const styles = createStyles(colors);
+  const lookup = useMemo(() => makeCategoryLookup(categories), [categories]);
 
-  // Refresh data when screen comes into focus
-  useFocusEffect(
-    useCallback(() => {
-      loadTransactions();
-    }, [])
-  );
+  const fetchPage = async (activeFilter: Filter, skip: number) => {
+    const typeParam = activeFilter === 'all' ? '' : `&type=${activeFilter}`;
+    const response = await api.get(`/transactions?limit=${PAGE_SIZE}&skip=${skip}${typeParam}`);
+    return response.data as Transaction[];
+  };
 
-  const loadTransactions = async () => {
+  const loadFirstPage = async (activeFilter: Filter) => {
     try {
-      const response = await api.get('/transactions?limit=100');
-      setTransactions(response.data);
-    } catch (error: any) {
+      const [page, categoriesRes] = await Promise.all([fetchPage(activeFilter, 0), api.get('/categories')]);
+      setTransactions(page);
+      setCategories(categoriesRes.data);
+      setHasMore(page.length === PAGE_SIZE);
+      setLoadError(false);
+    } catch (error) {
       console.error('Error loading transactions:', error);
+      setLoadError(true);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    loadTransactions();
+  // Refresh when the screen comes into focus or the filter changes
+  useFocusEffect(
+    useCallback(() => {
+      loadFirstPage(filter);
+    }, [filter])
+  );
+
+  const loadMore = async () => {
+    if (!hasMore || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await fetchPage(filter, transactions.length);
+      setTransactions((current) => [...current, ...page]);
+      setHasMore(page.length === PAGE_SIZE);
+    } catch (error) {
+      console.error('Error loading more transactions:', error);
+    } finally {
+      setLoadingMore(false);
+    }
   };
 
-  const formatCurrency = (amount: number) => {
-    return `${amount.toFixed(2)} zł`;
+  const changeFilter = (value: Filter) => {
+    if (value === filter) return;
+    setLoading(true);
+    setFilter(value);
   };
 
-  const handleDeleteTransaction = (id: string) => {
-    Alert.alert(
-      'Usuń transakcję',
-      'Czy na pewno chcesz usunąć tę transakcję?',
-      [
-        { text: 'Anuluj', style: 'cancel' },
-        {
-          text: 'Usuń',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await api.delete(`/transactions/${id}`);
-              setTransactions(transactions.filter(t => t.id !== id));
-            } catch (error) {
-              Alert.alert('Błąd', 'Nie udało się usunąć transakcji');
-            }
-          },
-        },
-      ]
-    );
-  };
+  // Group by day, newest first
+  const sections: DaySection[] = useMemo(() => {
+    const map = new Map<string, DaySection>();
+    for (const t of transactions) {
+      const date = parseServerDate(t.date);
+      const key = format(date, 'yyyy-MM-dd');
+      let section = map.get(key);
+      if (!section) {
+        section = { key, title: formatDayLabel(date), net: 0, data: [] };
+        map.set(key, section);
+      }
+      section.data.push(t);
+      section.net += t.type === 'income' ? t.amount : -t.amount;
+    }
+    return Array.from(map.values());
+  }, [transactions]);
 
-  const renderTransaction = ({ item }: { item: Transaction }) => (
-    <TouchableOpacity
-      style={styles.transactionItem}
-      onLongPress={() => handleDeleteTransaction(item.id)}
-    >
-      <View
-        style={[
-          styles.transactionIcon,
-          {
-            backgroundColor:
-              item.type === 'income' ? colors.income + '20' : colors.expense + '20',
-          },
+  const header = (
+    <View>
+      <LargeTitle title="Transakcje" />
+      <SegmentedControl<Filter>
+        value={filter}
+        onChange={changeFilter}
+        options={[
+          { value: 'all', label: 'Wszystkie' },
+          { value: 'expense', label: 'Wydatki' },
+          { value: 'income', label: 'Przychody' },
         ]}
-      >
-        <Ionicons
-          name={item.type === 'income' ? 'arrow-down' : 'arrow-up'}
-          size={24}
-          color={item.type === 'income' ? colors.income : colors.expense}
-        />
-      </View>
-      <View style={styles.transactionDetails}>
-        <Text style={styles.transactionCategory}>{item.category}</Text>
-        <Text style={styles.transactionDescription}>
-          {item.description || 'Brak opisu'}
-        </Text>
-        <Text style={styles.transactionDate}>
-          {format(new Date(item.date), 'dd MMMM yyyy, HH:mm', { locale: pl })}
-        </Text>
-        {item.is_recurring && (
-          <View style={styles.recurringBadge}>
-            <Ionicons name="repeat" size={12} color={colors.primary} />
-            <Text style={styles.recurringText}>
-              Cykliczne{item.recurring_day ? ` (${item.recurring_day}. dnia)` : ''}
+      />
+      {loadError ? (
+        <Text style={styles.errorText}>Nie udało się pobrać transakcji. Przeciągnij w dół, aby spróbować ponownie.</Text>
+      ) : null}
+      <View style={{ height: space.md }} />
+    </View>
+  );
+
+  return (
+    <View style={styles.screen}>
+      <SectionList
+        sections={loading ? [] : sections}
+        keyExtractor={(item) => item.id}
+        stickySectionHeadersEnabled={false}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + space.sm }]}
+        ListHeaderComponent={header}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              loadFirstPage(filter);
+            }}
+            tintColor={colors.primary}
+            colors={[colors.primary]}
+          />
+        }
+        renderSectionHeader={({ section }) => (
+          <View style={styles.dayHeader}>
+            <Text style={styles.dayTitle}>{section.title}</Text>
+            <Text style={[styles.dayNet, tabular, { color: section.net >= 0 ? colors.income : colors.textSecondary }]}>
+              {section.net >= 0 ? '+' : '−'}
+              {formatCurrency(Math.abs(section.net))}
             </Text>
           </View>
         )}
-      </View>
-      <View style={styles.transactionRight}>
-        <Text
-          style={[
-            styles.transactionAmount,
-            { color: item.type === 'income' ? colors.income : colors.expense },
-          ]}
-        >
-          {item.type === 'income' ? '+' : '-'}
-          {formatCurrency(item.amount)}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  );
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.container}>
-      <FlatList
-        data={transactions}
-        renderItem={renderTransaction}
-        keyExtractor={(item) => item.id}
-        contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
-        }
+        renderItem={({ item, index, section }) => {
+          const first = index === 0;
+          const last = index === section.data.length - 1;
+          return (
+            <View
+              style={[
+                styles.rowBox,
+                first && styles.rowFirst,
+                last && styles.rowLast,
+                !first && styles.rowDivider,
+              ]}
+            >
+              <TransactionRow
+                transaction={item}
+                category={lookup(item.category, item.type)}
+                onPress={() => router.push({ pathname: '/transaction/add', params: { id: item.id } })}
+              />
+            </View>
+          );
+        }}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Ionicons name="wallet-outline" size={64} color={colors.textLight} />
-            <Text style={styles.emptyText}>Brak transakcji</Text>
-            <Text style={styles.emptySubtext}>Dodaj swoją pierwszą transakcję</Text>
-          </View>
+          loading ? (
+            <ActivityIndicator style={{ marginTop: space.xxl }} color={colors.primary} />
+          ) : (
+            <EmptyState
+              icon="receipt-outline"
+              title={filter === 'income' ? 'Brak przychodów' : filter === 'expense' ? 'Brak wydatków' : 'Brak transakcji'}
+              text="Dodane transakcje pojawią się tutaj, pogrupowane według dni."
+              actionLabel="Dodaj transakcję"
+              onAction={() => router.push('/transaction/add')}
+            />
+          )
+        }
+        ListFooterComponent={
+          hasMore && !loading ? (
+            <TouchableOpacity style={styles.moreButton} onPress={loadMore} disabled={loadingMore}>
+              {loadingMore ? (
+                <ActivityIndicator color={colors.primary} />
+              ) : (
+                <Text style={styles.moreText}>Pokaż starsze transakcje</Text>
+              )}
+            </TouchableOpacity>
+          ) : null
         }
       />
 
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => router.push('/transaction/add')}
-      >
-        <Ionicons name="add" size={32} color="#fff" />
-      </TouchableOpacity>
+      <Fab onPress={() => router.push('/transaction/add')} label="Dodaj transakcję" />
     </View>
   );
 }
 
-const createStyles = (colors: any) => StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: colors.background,
-  },
-  listContent: {
-    padding: 16,
-    paddingBottom: 100,
-  },
-  transactionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.surface,
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 2,
-    elevation: 2,
-  },
-  transactionIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 14,
-  },
-  transactionDetails: {
-    flex: 1,
-  },
-  transactionCategory: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  transactionDescription: {
-    fontSize: 14,
-    color: colors.textSecondary,
-    marginTop: 2,
-  },
-  transactionDate: {
-    fontSize: 12,
-    color: colors.textLight,
-    marginTop: 4,
-  },
-  recurringBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 6,
-    backgroundColor: colors.primary + '15',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    alignSelf: 'flex-start',
-  },
-  recurringText: {
-    fontSize: 11,
-    color: colors.primary,
-    marginLeft: 4,
-    fontWeight: '600',
-  },
-  transactionRight: {
-    alignItems: 'flex-end',
-  },
-  transactionAmount: {
-    fontSize: 18,
-    fontWeight: '700',
-  },
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 60,
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-  },
-  emptyText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    marginTop: 16,
-  },
-  emptySubtext: {
-    fontSize: 14,
-    color: colors.textLight,
-    marginTop: 8,
-  },
-  fab: {
-    position: 'absolute',
-    right: 20,
-    bottom: 24,
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 6,
-  },
-});
+const createStyles = (colors: ThemeColors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.background },
+    content: { paddingHorizontal: space.lg, paddingBottom: 120 },
+    errorText: { color: colors.error, fontSize: 14, marginTop: space.md },
+    dayHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginTop: space.lg,
+      marginBottom: space.sm,
+      paddingHorizontal: space.xs,
+    },
+    dayTitle: { fontSize: 14, fontWeight: '700', color: colors.textSecondary, textTransform: 'capitalize' },
+    dayNet: { fontSize: 13, fontWeight: '600' },
+    rowBox: {
+      backgroundColor: colors.surface,
+      paddingHorizontal: space.md,
+      borderLeftWidth: 1,
+      borderRightWidth: 1,
+      borderColor: colors.border,
+    },
+    rowFirst: { borderTopWidth: 1, borderTopLeftRadius: radius.md, borderTopRightRadius: radius.md },
+    rowLast: { borderBottomWidth: 1, borderBottomLeftRadius: radius.md, borderBottomRightRadius: radius.md },
+    rowDivider: { borderTopWidth: 1, borderTopColor: colors.divider },
+    moreButton: {
+      marginTop: space.lg,
+      minHeight: 48,
+      borderRadius: radius.md,
+      borderWidth: 1,
+      borderColor: colors.border,
+      backgroundColor: colors.surface,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    moreText: { fontSize: 15, fontWeight: '600', color: colors.primary },
+  });

@@ -6,10 +6,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Constants from 'expo-constants';
 import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
-import { LargeTitle, Card, space, radius } from '../../components/ui';
+import { LargeTitle, Card, ProBadge, space, radius } from '../../components/ui';
 import { confirmAction, showMessage } from '../../utils/confirm';
 import { openSubscriptionPortal, PLAN_NAMES, ProPlan } from '../../utils/payments';
-import { apiErrorMessage } from '../../utils/format';
+import { apiErrorMessage, isProLimitError } from '../../utils/format';
+import { downloadExcelExport } from '../../utils/export';
+import { promptPro } from '../../utils/pro';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -19,6 +21,7 @@ export default function MoreScreen() {
   const { colors, isDark, toggleTheme } = useTheme();
   const { user, logout, refreshUser } = useAuth();
   const [portalBusy, setPortalBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const styles = createStyles(colors);
   const version = Constants.expoConfig?.version || '1.0.0';
 
@@ -45,6 +48,27 @@ export default function MoreScreen() {
       showMessage('Błąd', apiErrorMessage(error, 'Nie udało się otworzyć ustawień subskrypcji.'));
     } finally {
       setPortalBusy(false);
+    }
+  };
+
+  const exportToExcel = async () => {
+    if (!user?.is_pro) {
+      promptPro('Pobierz wszystkie transakcje i podsumowania miesięcy w jednym pliku Excel. Eksport jest dostępny w CashFlo Pro.', () =>
+        router.push('/pro/upgrade')
+      );
+      return;
+    }
+    setExportBusy(true);
+    try {
+      await downloadExcelExport();
+    } catch (error) {
+      if (isProLimitError(error)) {
+        promptPro(apiErrorMessage(error, ''), () => router.push('/pro/upgrade'));
+      } else {
+        showMessage('Błąd', apiErrorMessage(error, 'Nie udało się przygotować pliku.'));
+      }
+    } finally {
+      setExportBusy(false);
     }
   };
 
@@ -90,7 +114,7 @@ export default function MoreScreen() {
       : plan
       ? `Aktywne · plan ${PLAN_NAMES[plan]}`
       : 'Aktywne'
-    : 'Nieograniczone cele i kategorie';
+    : 'Import bez limitu, pełne podsumowania, eksport';
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={[styles.content, { paddingTop: insets.top + space.sm }]}>
@@ -130,7 +154,32 @@ export default function MoreScreen() {
       <Text style={styles.groupLabel}>Finanse</Text>
       <Card style={styles.group}>
         <Row icon="wallet-outline" title="Budżet miesięczny" onPress={() => router.push('/budget/settings')} first />
+        <Row icon="repeat" title="Stałe płatności" subtitle="Rachunki i subskrypcje" onPress={() => router.push('/recurring')} />
         <Row icon="pricetags-outline" title="Kategorie" onPress={() => router.push('/categories/manage')} />
+      </Card>
+
+      <Text style={styles.groupLabel}>Twoje dane</Text>
+      <Card style={styles.group}>
+        <Row
+          icon="cloud-upload-outline"
+          title="Import z banku lub Excela"
+          subtitle="Wgraj historię rachunku albo swój arkusz"
+          onPress={() => router.push('/import')}
+          first
+        />
+        <Row
+          icon="download-outline"
+          title="Eksport do Excela"
+          subtitle="Wszystkie transakcje w jednym pliku"
+          onPress={exportToExcel}
+          right={
+            exportBusy ? (
+              <ActivityIndicator color={colors.primary} />
+            ) : !user?.is_pro ? (
+              <ProBadge />
+            ) : undefined
+          }
+        />
       </Card>
 
       <Text style={styles.groupLabel}>Wygląd</Text>

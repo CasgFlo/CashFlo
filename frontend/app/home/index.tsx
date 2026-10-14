@@ -180,7 +180,7 @@ export default function LandingPage() {
               </View>
               <View style={styles.planFeatureItem}>
                 <Ionicons name="checkmark" size={18} color={BRAND_GREEN} />
-                <Text style={styles.planFeatureText}>Nieograniczone cele</Text>
+                <Text style={styles.planFeatureText}>Import z banku bez limitu</Text>
               </View>
               <View style={styles.planFeatureItem}>
                 <Ionicons name="checkmark" size={18} color={BRAND_GREEN} />

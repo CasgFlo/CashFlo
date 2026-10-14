@@ -8,25 +8,16 @@ import { useAuth } from '../../contexts/AuthContext';
 import { ScreenHeader, Card, Button, space, radius } from '../../components/ui';
 import { PRO_PLANS, PLAN_NAMES, ProPlan, startCheckout, openSubscriptionPortal } from '../../utils/payments';
 import { apiErrorMessage } from '../../utils/format';
-import { FREE_CUSTOM_CATEGORY_LIMIT, FREE_GOAL_LIMIT } from '../../utils/types';
+import { PRO_FEATURES } from '../../utils/pro';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
-// Only features that work today
-const PRO_FEATURES: { icon: IconName; title: string; text: string }[] = [
-  {
-    icon: 'flag',
-    title: 'Nieograniczone cele oszczędnościowe',
-    text: `W wersji darmowej możesz mieć ${FREE_GOAL_LIMIT} cel.`,
-  },
-  {
-    icon: 'pricetags',
-    title: 'Nieograniczone własne kategorie',
-    text: `W wersji darmowej możesz dodać ${FREE_CUSTOM_CATEGORY_LIMIT} własne kategorie.`,
-  },
+// Why people upgrade, in their words
+const HIGHLIGHTS: { icon: IconName; text: string }[] = [
+  { icon: 'cloud-upload-outline', text: 'Wgrywasz historię z banku i masz wszystko w minutę, bez przepisywania.' },
+  { icon: 'repeat', text: 'Widzisz, ile naprawdę kosztują Cię subskrypcje i stałe opłaty w roku.' },
+  { icon: 'bulb-outline', text: 'Co miesiąc dostajesz konkretne wnioski: co wzrosło i gdzie możesz odłożyć.' },
 ];
-
-const COMING_SOON = ['Powiadomienia o przekroczeniu budżetu', 'Szczegółowe raporty'];
 
 export default function ProUpgradeScreen() {
   const router = useRouter();
@@ -68,23 +59,20 @@ export default function ProUpgradeScreen() {
   };
 
   const featureList = (
-    <Card>
-      {PRO_FEATURES.map((f, i) => (
-        <View key={f.title} style={[styles.featureRow, i > 0 && styles.featureDivider]}>
+    <Card style={{ paddingVertical: space.sm }}>
+      <View style={styles.tableHeader}>
+        <Text style={[styles.tableHeadText, { flex: 1 }]}>Funkcja</Text>
+        <Text style={[styles.tableHeadText, styles.colFree]}>Darmowy</Text>
+        <Text style={[styles.tableHeadText, styles.colPro, { color: colors.primary }]}>Pro</Text>
+      </View>
+      {PRO_FEATURES.map((f) => (
+        <View key={f.title} style={[styles.featureRow, styles.featureDivider]}>
           <View style={styles.featureIcon}>
-            <Ionicons name={f.icon} size={18} color={colors.primary} />
+            <Ionicons name={f.icon as IconName} size={16} color={colors.primary} />
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.featureTitle}>{f.title}</Text>
-            <Text style={styles.featureText}>{f.text}</Text>
-          </View>
-        </View>
-      ))}
-      <Text style={styles.soonLabel}>Wkrótce w Pro</Text>
-      {COMING_SOON.map((item) => (
-        <View key={item} style={styles.soonRow}>
-          <Ionicons name="time-outline" size={16} color={colors.textLight} />
-          <Text style={styles.soonText}>{item}</Text>
+          <Text style={[styles.featureTitle, { flex: 1 }]}>{f.title}</Text>
+          <Text style={[styles.colFree, styles.freeValue]}>{f.free}</Text>
+          <Text style={[styles.colPro, styles.proValue]}>{f.pro}</Text>
         </View>
       ))}
     </Card>
@@ -131,9 +119,18 @@ export default function ProUpgradeScreen() {
           <View style={styles.heroIcon}>
             <Ionicons name="star" size={28} color={colors.onAccent} />
           </View>
-          <Text style={styles.heroTitle}>Więcej z CashFlo</Text>
-          <Text style={styles.heroText}>Odkładaj na kilka celów naraz i układaj wydatki po swojemu.</Text>
+          <Text style={styles.heroTitle}>Pełna kontrola nad pieniędzmi</Text>
+          <Text style={styles.heroText}>Mniej wpisywania, więcej odpowiedzi na pytanie: gdzie znikają moje pieniądze?</Text>
         </View>
+
+        <Card>
+          {HIGHLIGHTS.map((h, i) => (
+            <View key={h.text} style={[styles.highlightRow, i > 0 && styles.featureDivider]}>
+              <Ionicons name={h.icon} size={20} color={colors.primary} style={{ marginTop: 1 }} />
+              <Text style={styles.highlightText}>{h.text}</Text>
+            </View>
+          ))}
+        </Card>
 
         {featureList}
 
@@ -225,22 +222,26 @@ const createStyles = (colors: ThemeColors) =>
     },
     heroTitle: { fontSize: 26, fontWeight: '800', color: colors.text, letterSpacing: -0.4, textAlign: 'center' },
     heroText: { fontSize: 15, color: colors.textSecondary, textAlign: 'center', marginTop: space.sm, lineHeight: 21, maxWidth: 320 },
-    featureRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: space.sm },
+    tableHeader: { flexDirection: 'row', alignItems: 'center', paddingVertical: space.sm },
+    tableHeadText: { fontSize: 12, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.5 },
+    colFree: { width: 72, textAlign: 'center' },
+    colPro: { width: 84, textAlign: 'center' },
+    freeValue: { fontSize: 13, color: colors.textSecondary },
+    proValue: { fontSize: 13, fontWeight: '800', color: colors.primary },
+    featureRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: space.md },
     featureDivider: { borderTopWidth: 1, borderTopColor: colors.divider },
     featureIcon: {
-      width: 34,
-      height: 34,
-      borderRadius: 17,
+      width: 30,
+      height: 30,
+      borderRadius: 15,
       backgroundColor: colors.primarySoft,
       alignItems: 'center',
       justifyContent: 'center',
-      marginRight: space.md,
+      marginRight: space.sm,
     },
-    featureTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
-    featureText: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
-    soonLabel: { fontSize: 12, fontWeight: '700', color: colors.textLight, textTransform: 'uppercase', letterSpacing: 0.6, marginTop: space.md },
-    soonRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.sm },
-    soonText: { fontSize: 14, color: colors.textSecondary, marginLeft: space.sm },
+    featureTitle: { fontSize: 14, fontWeight: '600', color: colors.text },
+    highlightRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: space.md },
+    highlightText: { flex: 1, fontSize: 15, color: colors.text, lineHeight: 21, marginLeft: space.md },
     sectionLabel: { fontSize: 17, fontWeight: '700', color: colors.text, marginTop: space.md, marginBottom: space.md },
     planCard: {
       flexDirection: 'row',

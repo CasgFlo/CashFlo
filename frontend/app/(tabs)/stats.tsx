@@ -1,6 +1,6 @@
 import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PieChart } from 'react-native-gifted-charts';
@@ -12,6 +12,7 @@ import { makeCategoryLookup, categoryColor } from '../../utils/categories';
 import { LargeTitle, Card, ProgressBar, EmptyState, tabular, space, radius } from '../../components/ui';
 
 export default function StatsScreen() {
+  const router = useRouter();
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
   const now = new Date();
@@ -118,6 +119,23 @@ export default function StatsScreen() {
         <EmptyState icon="cloud-offline-outline" title="Nie udało się pobrać statystyk" text="Przeciągnij w dół, aby spróbować ponownie." />
       ) : (
         <>
+          {/* Monthly summary with conclusions */}
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push({ pathname: '/report', params: { year: String(period.year), month: String(period.month) } })}
+          >
+            <Card style={styles.reportCard}>
+              <View style={styles.reportIcon}>
+                <Ionicons name="document-text" size={18} color={colors.onAccent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.reportTitle}>Podsumowanie miesiąca</Text>
+                <Text style={styles.balanceHint}>Wnioski, porównanie z poprzednim miesiącem i porady</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.textLight} />
+            </Card>
+          </TouchableOpacity>
+
           {/* Summary */}
           <View style={styles.summaryRow}>
             <Card style={styles.summaryCard}>
@@ -214,6 +232,17 @@ const createStyles = (colors: ThemeColors) =>
     monthButton: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
     monthLabel: { fontSize: 16, fontWeight: '700', color: colors.text },
     summaryRow: { flexDirection: 'row', gap: space.md },
+    reportCard: { flexDirection: 'row', alignItems: 'center' },
+    reportIcon: {
+      width: 36,
+      height: 36,
+      borderRadius: 18,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: space.md,
+    },
+    reportTitle: { fontSize: 15, fontWeight: '700', color: colors.text },
     summaryCard: { flex: 1 },
     summaryLabel: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
     summaryValue: { fontSize: 20, fontWeight: '800', marginTop: 4 },

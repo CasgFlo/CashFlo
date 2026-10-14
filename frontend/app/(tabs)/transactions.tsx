@@ -2,6 +2,7 @@ import React, { useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, SectionList, RefreshControl, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
 import { format } from 'date-fns';
 import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import api from '../../utils/api';
@@ -104,7 +105,20 @@ export default function TransactionsScreen() {
 
   const header = (
     <View>
-      <LargeTitle title="Transakcje" />
+      <LargeTitle
+        title="Transakcje"
+        right={
+          <TouchableOpacity
+            onPress={() => router.push('/import')}
+            style={styles.importButton}
+            accessibilityRole="button"
+            accessibilityLabel="Importuj z banku lub Excela"
+          >
+            <Ionicons name="cloud-upload-outline" size={18} color={colors.primary} />
+            <Text style={styles.importButtonText}>Importuj</Text>
+          </TouchableOpacity>
+        }
+      />
       <SegmentedControl<Filter>
         value={filter}
         onChange={changeFilter}
@@ -176,7 +190,7 @@ export default function TransactionsScreen() {
             <EmptyState
               icon="receipt-outline"
               title={filter === 'income' ? 'Brak przychodów' : filter === 'expense' ? 'Brak wydatków' : 'Brak transakcji'}
-              text="Dodane transakcje pojawią się tutaj, pogrupowane według dni."
+              text="Dodane transakcje pojawią się tutaj, pogrupowane według dni. Możesz też wgrać historię z banku przyciskiem Importuj."
               actionLabel="Dodaj transakcję"
               onAction={() => router.push('/transaction/add')}
             />
@@ -205,6 +219,16 @@ const createStyles = (colors: ThemeColors) =>
     screen: { flex: 1, backgroundColor: colors.background },
     content: { paddingHorizontal: space.lg, paddingBottom: 120 },
     errorText: { color: colors.error, fontSize: 14, marginTop: space.md },
+    importButton: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      paddingHorizontal: 12,
+      minHeight: 36,
+      borderRadius: radius.pill,
+      backgroundColor: colors.primarySoft,
+      marginBottom: 4,
+    },
+    importButtonText: { fontSize: 14, fontWeight: '700', color: colors.primary, marginLeft: 6 },
     dayHeader: {
       flexDirection: 'row',
       alignItems: 'center',

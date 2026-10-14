@@ -35,7 +35,14 @@ jobs:
           MONGO_URL: mongodb://localhost:27017
           JWT_SECRET_KEY: ci-test-secret
           DB_NAME: cashflo_ci
-        run: python -m pytest -q -rs tests
+        run: |
+          set +e
+          python -m pytest -q --tb=line -rfEs tests > pytest.txt 2>&1
+          status=$?
+          cat pytest.txt
+          echo "::notice title=pytest::$(tail -n 1 pytest.txt)"
+          grep -E "^(FAILED|ERROR)|Error:|assert " pytest.txt | head -25 | while IFS= read -r line; do echo "::error title=pytest::$line"; done
+          exit $status
 
   frontend:
     runs-on: ubuntu-latest
@@ -59,6 +66,19 @@ jobs:
             git push
           fi
       - name: Type check
-        run: npx tsc --noEmit
+        run: |
+          set +e
+          npx tsc --noEmit --pretty false > tsc.txt 2>&1
+          status=$?
+          cat tsc.txt
+          echo "::notice title=tsc::$(grep -c 'error TS' tsc.txt) errors"
+          grep "error TS" tsc.txt | head -40 | while IFS= read -r line; do echo "::error title=tsc::$line"; done
+          exit $status
       - name: Bundle for Android
-        run: npx expo export --platform android --output-dir /tmp/expo-export
+        run: |
+          set +e
+          npx expo export --platform android --output-dir /tmp/expo-export > export.txt 2>&1
+          status=$?
+          cat export.txt
+          if [ $status -ne 0 ]; then tail -n 15 export.txt | while IFS= read -r line; do echo "::error title=expo export::$line"; done; fi
+          exit $status

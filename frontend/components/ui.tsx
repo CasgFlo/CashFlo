@@ -12,8 +12,12 @@ import {
   StyleProp,
   ViewStyle,
   TextStyle,
+  Modal,
+  ScrollView,
+  Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, ThemeColors } from '../contexts/ThemeContext';
 import { Category, Transaction } from '../utils/types';
 import { formatSignedCurrency } from '../utils/format';
@@ -357,6 +361,142 @@ export function Fab({ onPress, label }: { onPress: () => void; label: string }) 
   );
 }
 
+/** Small amber "PRO" label next to features that need Pro. */
+export function ProBadge({ style }: { style?: StyleProp<ViewStyle> }) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.proBadge, { backgroundColor: colors.accent }, style]}>
+      <Ionicons name="star" size={10} color={colors.onAccent} />
+      <Text style={[styles.proBadgeText, { color: colors.onAccent }]}>PRO</Text>
+    </View>
+  );
+}
+
+/** A tappable row with an icon, title and optional subtitle, used in grouped lists. */
+export function ListRow({
+  icon,
+  title,
+  subtitle,
+  onPress,
+  right,
+  tint,
+  divider,
+}: {
+  icon: IconName;
+  title: string;
+  subtitle?: string;
+  onPress?: () => void;
+  right?: React.ReactNode;
+  tint?: string;
+  divider?: boolean;
+}) {
+  const { colors } = useTheme();
+  const color = tint || colors.primary;
+  return (
+    <TouchableOpacity
+      style={[styles.listRow, divider && { borderTopWidth: 1, borderTopColor: colors.divider }]}
+      onPress={onPress}
+      disabled={!onPress}
+      activeOpacity={0.7}
+      accessibilityRole={onPress ? 'button' : undefined}
+    >
+      <View style={[styles.listRowIcon, { backgroundColor: color + '1A' }]}>
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.listRowTitle, { color: colors.text }]}>{title}</Text>
+        {subtitle ? <Text style={[styles.listRowSubtitle, { color: colors.textSecondary }]}>{subtitle}</Text> : null}
+      </View>
+      {right !== undefined ? right : onPress ? <Ionicons name="chevron-forward" size={18} color={colors.textLight} /> : null}
+    </TouchableOpacity>
+  );
+}
+
+/** One plain-language conclusion ("Wydano o 12% mniej niż we wrześniu"). */
+export function InsightRow({
+  icon,
+  text,
+  tone = 'neutral',
+  divider,
+}: {
+  icon: string;
+  text: string;
+  tone?: 'positive' | 'negative' | 'neutral';
+  divider?: boolean;
+}) {
+  const { colors } = useTheme();
+  const color = tone === 'positive' ? colors.income : tone === 'negative' ? colors.expense : colors.textSecondary;
+  return (
+    <View style={[styles.insightRow, divider && { borderTopWidth: 1, borderTopColor: colors.divider }]}>
+      <Ionicons name={(icon as IconName) || 'bulb-outline'} size={18} color={color} style={{ marginTop: 1 }} />
+      <Text style={[styles.insightText, { color: colors.text }]}>{text}</Text>
+    </View>
+  );
+}
+
+/** A friendly "this is in Pro" card with a button that opens the Pro screen. */
+export function LockedCard({
+  title,
+  text,
+  onPress,
+  buttonLabel = 'Zobacz CashFlo Pro',
+}: {
+  title: string;
+  text?: string;
+  onPress: () => void;
+  buttonLabel?: string;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.card, styles.locked, { backgroundColor: colors.surface, borderColor: colors.accent }]}>
+      <View style={styles.lockedTop}>
+        <View style={[styles.lockedIcon, { backgroundColor: colors.accent + '33' }]}>
+          <Ionicons name="lock-closed" size={16} color={colors.warning} />
+        </View>
+        <Text style={[styles.lockedTitle, { color: colors.text }]}>{title}</Text>
+      </View>
+      {text ? <Text style={[styles.lockedText, { color: colors.textSecondary }]}>{text}</Text> : null}
+      <Button title={buttonLabel} icon="star" variant="secondary" onPress={onPress} style={{ marginTop: space.md }} />
+    </View>
+  );
+}
+
+/** A panel that slides up from the bottom of the screen. */
+export function Sheet({
+  visible,
+  title,
+  onClose,
+  children,
+}: {
+  visible: boolean;
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  const { colors } = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={[styles.sheetOverlay, { backgroundColor: colors.overlay }]}>
+        <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Zamknij" />
+        <View style={[styles.sheet, { backgroundColor: colors.background, paddingBottom: insets.bottom + space.lg }]}>
+          <View style={styles.sheetHeader}>
+            <Text style={[styles.sheetTitle, { color: colors.text }]} numberOfLines={2}>
+              {title}
+            </Text>
+            <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }} accessibilityLabel="Zamknij">
+              <Ionicons name="close" size={24} color={colors.text} />
+            </TouchableOpacity>
+          </View>
+          <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 520 }}>
+            {children}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export const makeScreenStyles = (colors: ThemeColors) =>
   StyleSheet.create({
     screen: { flex: 1, backgroundColor: colors.background },
@@ -528,6 +668,41 @@ const styles = StyleSheet.create({
     marginTop: 3,
     minHeight: 13,
   },
+  proBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+  },
+  proBadgeText: { fontSize: 10, fontWeight: '800', marginLeft: 2, letterSpacing: 0.4 },
+  listRow: { flexDirection: 'row', alignItems: 'center', minHeight: 56, paddingVertical: space.sm },
+  listRowIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: space.md,
+  },
+  listRowTitle: { fontSize: 15, fontWeight: '600' },
+  listRowSubtitle: { fontSize: 13, marginTop: 1 },
+  insightRow: { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: space.sm },
+  insightText: { flex: 1, fontSize: 14, lineHeight: 20, marginLeft: space.sm },
+  locked: { borderWidth: 1 },
+  lockedTop: { flexDirection: 'row', alignItems: 'center' },
+  lockedIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center', marginRight: space.sm },
+  lockedTitle: { flex: 1, fontSize: 15, fontWeight: '700' },
+  lockedText: { fontSize: 14, lineHeight: 20, marginTop: space.sm },
+  sheetOverlay: { flex: 1, justifyContent: 'flex-end' },
+  sheet: {
+    borderTopLeftRadius: radius.lg,
+    borderTopRightRadius: radius.lg,
+    paddingHorizontal: space.lg,
+    paddingTop: space.lg,
+  },
+  sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.md },
+  sheetTitle: { flex: 1, fontSize: 18, fontWeight: '800', marginRight: space.md },
   fab: {
     position: 'absolute',
     right: 20,

@@ -81,6 +81,17 @@ export function apiErrorMessage(error: any, fallback: string): string {
     'Payments are not configured': 'Płatności są chwilowo niedostępne.',
     'Could not start payment': 'Nie udało się rozpocząć płatności. Spróbuj ponownie.',
     'User already has Pro': 'Masz już CashFlo Pro.',
+    'Category limits are a Pro feature': 'Limity dla kategorii są dostępne w CashFlo Pro.',
+    'Export is a Pro feature': 'Eksport do Excela jest dostępny w CashFlo Pro.',
+    'Import session expired': 'Minęło zbyt dużo czasu od wybrania pliku. Wybierz go jeszcze raz.',
+    'Nothing to import': 'Nie zaznaczono żadnej transakcji do importu.',
+    'Recurring payment not found': 'Ta stała płatność została już usunięta.',
+    'Import error: empty': 'Plik jest pusty.',
+    'Import error: too_large': 'Plik jest za duży (najwyżej 5 MB). Pobierz z banku krótszy okres.',
+    'Import error: old_excel': 'To plik w starym formacie Excela (.xls). Zapisz go jako .xlsx albo .csv i spróbuj ponownie.',
+    'Import error: pdf': 'Wyciągu w PDF nie da się zaimportować. Pobierz z banku historię rachunku w formacie CSV albo Excel.',
+    'Import error: unreadable': 'Nie udało się odczytać pliku. Wybierz plik CSV albo Excel (.xlsx).',
+    'Import error: mapping': 'Wskaż kolumnę z datą i kolumnę z kwotą.',
   };
   if (typeof detail === 'string') {
     if (known[detail]) return known[detail];
@@ -89,6 +100,56 @@ export function apiErrorMessage(error: any, fallback: string): string {
         ? 'W wersji darmowej możesz mieć 1 cel. Przejdź na Pro, aby dodać więcej.'
         : 'W wersji darmowej możesz dodać 3 własne kategorie. Przejdź na Pro, aby dodać więcej.';
     }
+    if (detail.startsWith('Free users can have up to')) {
+      return 'W wersji darmowej możesz mieć 3 stałe płatności. Przejdź na Pro, aby dodać więcej.';
+    }
+    if (detail.startsWith('Free users can import')) {
+      return 'Darmowy import został już wykorzystany. W Pro importujesz pliki bez limitu.';
+    }
   }
   return fallback;
+}
+
+/** True when the server refused because the free plan's limit was reached. */
+export function isProLimitError(error: any): boolean {
+  const detail = error?.response?.data?.detail;
+  return (
+    error?.response?.status === 403 &&
+    typeof detail === 'string' &&
+    (detail.startsWith('Free users') || detail.includes('Pro feature'))
+  );
+}
+
+const FREQUENCY_LABELS: Record<string, string> = {
+  weekly: 'co tydzień',
+  monthly: 'co miesiąc',
+  yearly: 'co rok',
+};
+
+export function formatFrequency(frequency: string): string {
+  return FREQUENCY_LABELS[frequency] || frequency;
+}
+
+/** A calendar day sent by the server as "YYYY-MM-DD" (no time zone): read it as that day, locally. */
+export function parseDay(value: string): Date {
+  const [y, m, d] = value.slice(0, 10).split('-').map(Number);
+  return new Date(y, (m || 1) - 1, d || 1, 12, 0, 0);
+}
+
+/** "Dziś", "Jutro", "za 3 dni", or "5 lis". */
+export function formatDueDate(date: Date): string {
+  const today = new Date();
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const day = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const days = Math.round((day.getTime() - start.getTime()) / 86400000);
+  if (days === 0) return 'dziś';
+  if (days === 1) return 'jutro';
+  if (days > 1 && days < 7) return `za ${days} dni`;
+  return formatShortDate(date);
+}
+
+/** "+31%" / "−12%" */
+export function formatChange(pct: number): string {
+  const value = Math.round(Math.abs(pct) * 100);
+  return `${pct >= 0 ? '+' : '−'}${value}%`;
 }

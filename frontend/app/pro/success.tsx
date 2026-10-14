@@ -75,7 +75,7 @@ export default function PaymentSuccessScreen() {
             <Ionicons name="star" size={36} color={colors.onAccent} />
           </View>
           <Text style={styles.title}>Masz CashFlo Pro!</Text>
-          <Text style={styles.text}>Dziękujemy. Nieograniczone cele i własne kategorie są już odblokowane.</Text>
+          <Text style={styles.text}>Dziękujemy. Import bez limitu, pełne podsumowania, eksport do Excela i reszta funkcji Pro są już odblokowane.</Text>
           <Button title="Przejdź do aplikacji" onPress={() => router.replace('/(tabs)')} style={styles.button} />
         </View>
       ) : null}

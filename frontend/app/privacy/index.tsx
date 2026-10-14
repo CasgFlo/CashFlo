@@ -35,7 +35,7 @@ export default function PrivacyPolicy() {
         style={styles.content}
         contentContainerStyle={[styles.contentContainer, { paddingBottom: insets.bottom + 40 }]}
       >
-        <Text style={styles.lastUpdated}>Ostatnia aktualizacja: Maj 2026</Text>
+        <Text style={styles.lastUpdated}>Ostatnia aktualizacja: Październik 2026</Text>
 
         <Text style={styles.intro}>
           Ochrona Twoich danych osobowych jest dla nas priorytetem. Niniejsza Polityka 
@@ -55,7 +55,11 @@ export default function PrivacyPolicy() {
         <Text style={styles.subTitle}>2.1. Dane podawane przez Użytkownika:</Text>
         <Text style={styles.listItem}>• Adres e-mail (do rejestracji i logowania)</Text>
         <Text style={styles.listItem}>• Imię/nazwa użytkownika</Text>
-        <Text style={styles.listItem}>• Dane finansowe wprowadzane do aplikacji (transakcje, cele, budżety)</Text>
+        <Text style={styles.listItem}>• Dane finansowe wprowadzane do aplikacji (transakcje, cele, budżety, stałe płatności)</Text>
+        <Text style={styles.listItem}>
+          • Pliki z historią rachunku lub arkusze, które sam wgrywasz do importu. Odczytujemy z nich tylko
+          datę, kwotę, opis i kategorię transakcji. Sam plik usuwamy z serwera po imporcie, a najpóźniej po 2 godzinach.
+        </Text>
 
         <Text style={styles.subTitle}>2.2. Dane zbierane automatycznie:</Text>
         <Text style={styles.listItem}>• Informacje o urządzeniu (model, system operacyjny)</Text>

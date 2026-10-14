@@ -8,10 +8,15 @@ import { pl } from 'date-fns/locale';
 import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../utils/api';
-import { Transaction, MonthlyStats, Budget, Category } from '../../utils/types';
-import { formatCurrency, formatDayLabel, parseServerDate } from '../../utils/format';
+import { Transaction, MonthlyStats, Budget, Category, MonthlyReport, RecurringPayment } from '../../utils/types';
+import { formatCurrency, formatDayLabel, formatDueDate, parseServerDate } from '../../utils/format';
 import { makeCategoryLookup, categoryColor } from '../../utils/categories';
-import { Card, SectionHeader, ProgressBar, TransactionRow, Fab, EmptyState, tabular, space, radius } from '../../components/ui';
+import { Card, SectionHeader, ProgressBar, TransactionRow, Fab, EmptyState, Button, IconBubble, tabular, space, radius } from '../../components/ui';
+
+type IconName = React.ComponentProps<typeof Ionicons>['name'];
+
+// The summary of last month is offered on the home screen during the first days of a new month
+const SUMMARY_DAYS = 10;
 
 export default function DashboardScreen() {
   const router = useRouter();
@@ -25,6 +30,8 @@ export default function DashboardScreen() {
   const [recentTransactions, setRecentTransactions] = useState<Transaction[]>([]);
   const [budget, setBudget] = useState<Budget | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [lastMonth, setLastMonth] = useState<MonthlyReport | null>(null);
+  const [upcoming, setUpcoming] = useState<RecurringPayment[]>([]);
 
   const styles = createStyles(colors);
   const lookup = useMemo(() => makeCategoryLookup(categories), [categories]);
@@ -53,6 +60,30 @@ export default function DashboardScreen() {
         setBudget(budgetRes.data);
       } catch {
         setBudget(null); // budget not set yet
+      }
+
+      // Extras: never block the home screen
+      const today = new Date();
+      const prev = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      const [recurringRes, reportRes] = await Promise.allSettled([
+        api.get('/recurring'),
+        today.getDate() <= SUMMARY_DAYS
+          ? api.get(`/reports/monthly?year=${prev.getFullYear()}&month=${prev.getMonth() + 1}`)
+          : Promise.resolve(null),
+      ]);
+      if (recurringRes.status === 'fulfilled') {
+        const weekAhead = Date.now() + 7 * 86400000;
+        setUpcoming(
+          (recurringRes.value.data.items as RecurringPayment[])
+            .filter((r) => r.active && r.type === 'expense' && parseServerDate(r.next_date).getTime() <= weekAhead)
+            .slice(0, 3)
+        );
+      }
+      if (reportRes.status === 'fulfilled' && reportRes.value) {
+        const report: MonthlyReport = reportRes.value.data;
+        setLastMonth(report.has_data ? report : null);
+      } else {
+        setLastMonth(null);
       }
     } catch (error) {
       console.error('Error loading dashboard:', error);
@@ -118,6 +149,16 @@ export default function DashboardScreen() {
     });
   }
 
+  // Categories close to their limit (Pro)
+  const categoryWarnings =
+    budget?.category_limits_active && budget.category_spending
+      ? Object.entries(budget.category_limits || {})
+          .map(([name, limit]) => ({ name, share: limit > 0 ? (budget.category_spending?.[name] || 0) / limit : 0 }))
+          .filter((c) => c.share >= 0.8)
+          .sort((a, b) => b.share - a.share)
+          .slice(0, 2)
+      : [];
+
   const budgetUsed = budget && budget.monthly_limit > 0 ? budget.current_month_spending / budget.monthly_limit : 0;
   const budgetLeft = budget ? budget.monthly_limit - budget.current_month_spending : 0;
   const budgetColor = budgetUsed > 0.9 ? colors.error : budgetUsed > 0.7 ? colors.warning : colors.primary;
@@ -177,6 +218,27 @@ export default function DashboardScreen() {
           </View>
         </View>
 
+        {/* Last month's summary, in the first days of a new month */}
+        {lastMonth ? (
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={() => router.push({ pathname: '/report', params: { year: String(lastMonth.year), month: String(lastMonth.month) } })}
+          >
+            <Card style={styles.summaryCard}>
+              <View style={styles.summaryIcon}>
+                <Ionicons name="document-text" size={20} color={colors.onAccent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.promptTitle}>Podsumowanie {lastMonth.month_genitive} jest gotowe</Text>
+                <Text style={styles.muted} numberOfLines={2}>
+                  {lastMonth.insights[0]?.text || 'Zobacz, na co poszły pieniądze i co się zmieniło.'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={colors.textLight} />
+            </Card>
+          </TouchableOpacity>
+        ) : null}
+
         {/* Budget */}
         {budget && budget.monthly_limit > 0 ? (
           <TouchableOpacity activeOpacity={0.8} onPress={() => router.push('/budget/settings')}>
@@ -192,6 +254,14 @@ export default function DashboardScreen() {
               <Text style={[styles.muted, tabular, { marginTop: space.sm }]}>
                 Wydano {formatCurrency(budget.current_month_spending)} z {formatCurrency(budget.monthly_limit)}
               </Text>
+              {categoryWarnings.map((c) => (
+                <View key={c.name} style={styles.warningRow}>
+                  <Ionicons name="alert-circle" size={16} color={c.share >= 1 ? colors.error : colors.warning} />
+                  <Text style={styles.warningText} numberOfLines={1}>
+                    {c.name}: {c.share >= 1 ? 'limit przekroczony' : `${Math.round(c.share * 100)}% limitu`}
+                  </Text>
+                </View>
+              ))}
             </Card>
           </TouchableOpacity>
         ) : (
@@ -208,6 +278,29 @@ export default function DashboardScreen() {
             </Card>
           </TouchableOpacity>
         )}
+
+        {/* Recurring payments due soon */}
+        {upcoming.length > 0 ? (
+          <TouchableOpacity activeOpacity={0.8} onPress={() => router.push('/recurring')}>
+            <Card>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardLabel}>Najbliższe płatności</Text>
+                <Ionicons name="chevron-forward" size={18} color={colors.textLight} />
+              </View>
+              {upcoming.map((r) => {
+                const category = lookup(r.category, 'expense');
+                return (
+                  <View key={r.id} style={styles.upcomingRow}>
+                    <IconBubble name={(category?.icon as IconName) || 'repeat'} color={category?.color || colors.primary} size={32} />
+                    <Text style={styles.upcomingName} numberOfLines={1}>{r.name}</Text>
+                    <Text style={styles.upcomingWhen}>{formatDueDate(parseServerDate(r.next_date))}</Text>
+                    <Text style={[styles.upcomingAmount, tabular]}>{formatCurrency(r.amount)}</Text>
+                  </View>
+                );
+              })}
+            </Card>
+          </TouchableOpacity>
+        ) : null}
 
         {/* Where the money goes */}
         {topSpending.length > 0 ? (
@@ -257,13 +350,22 @@ export default function DashboardScreen() {
           onAction={() => router.push('/(tabs)/transactions')}
         />
         {recentTransactions.length === 0 ? (
-          <EmptyState
-            icon="receipt-outline"
-            title="Nie masz jeszcze transakcji"
-            text="Dodaj pierwszy wydatek albo przychód. Zajmie Ci to kilka sekund."
-            actionLabel="Dodaj transakcję"
-            onAction={() => router.push('/transaction/add')}
-          />
+          <>
+            <EmptyState
+              icon="receipt-outline"
+              title="Nie masz jeszcze transakcji"
+              text="Dodaj pierwszy wydatek albo wgraj historię z banku lub Excela. Zobaczysz od razu, gdzie idą pieniądze."
+              actionLabel="Dodaj transakcję"
+              onAction={() => router.push('/transaction/add')}
+            />
+            <Button
+              title="Importuj z banku lub Excela"
+              icon="cloud-upload-outline"
+              variant="secondary"
+              onPress={() => router.push('/import')}
+              style={{ marginTop: space.sm }}
+            />
+          </>
         ) : (
           <Card style={styles.listCard}>
             {recentTransactions.map((t, index) => (
@@ -337,6 +439,22 @@ const createStyles = (colors: ThemeColors) =>
       marginRight: space.md,
     },
     promptTitle: { fontSize: 15, fontWeight: '700', color: colors.text, marginBottom: 2 },
+    summaryCard: { flexDirection: 'row', alignItems: 'center', borderColor: colors.accent },
+    summaryIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 20,
+      backgroundColor: colors.accent,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginRight: space.md,
+    },
+    warningRow: { flexDirection: 'row', alignItems: 'center', marginTop: space.sm },
+    warningText: { flex: 1, fontSize: 13, fontWeight: '600', color: colors.text, marginLeft: 6 },
+    upcomingRow: { flexDirection: 'row', alignItems: 'center', paddingTop: space.md },
+    upcomingName: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text, marginLeft: space.sm },
+    upcomingWhen: { fontSize: 13, color: colors.textSecondary, marginHorizontal: space.sm },
+    upcomingAmount: { fontSize: 14, fontWeight: '700', color: colors.text },
     stackBar: {
       flexDirection: 'row',
       height: 12,

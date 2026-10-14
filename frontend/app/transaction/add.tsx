@@ -24,8 +24,9 @@ import { pl } from 'date-fns/locale';
 import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import api from '../../utils/api';
 import { Category, Transaction } from '../../utils/types';
-import { parseAmount, sanitizeAmountInput, apiErrorMessage, parseServerDate } from '../../utils/format';
+import { parseAmount, sanitizeAmountInput, apiErrorMessage, parseServerDate, isProLimitError } from '../../utils/format';
 import { confirmAction, showMessage } from '../../utils/confirm';
+import { promptPro } from '../../utils/pro';
 import { ScreenHeader, SegmentedControl, Chip, Button, space, radius, tabular } from '../../components/ui';
 
 type TxType = 'expense' | 'income';
@@ -54,8 +55,6 @@ export default function AddTransactionScreen() {
   const [date, setDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [isRecurring, setIsRecurring] = useState(false);
-  const [recurringDay, setRecurringDay] = useState<number | null>(null);
-  const [showDayPicker, setShowDayPicker] = useState(false);
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [receiptChanged, setReceiptChanged] = useState(false);
   const [original, setOriginal] = useState<Transaction | null>(null);
@@ -157,13 +156,6 @@ export default function AddTransactionScreen() {
     setReceiptChanged(true);
   };
 
-  // ----- recurring -----
-  const handleRecurringToggle = (value: boolean) => {
-    setIsRecurring(value);
-    if (value) setShowDayPicker(true);
-    else setRecurringDay(null);
-  };
-
   // ----- save / delete -----
   const handleSubmit = async () => {
     setError(null);
@@ -176,11 +168,6 @@ export default function AddTransactionScreen() {
       setError('Wybierz kategorię.');
       return;
     }
-    if (isRecurring && !recurringDay) {
-      setShowDayPicker(true);
-      return;
-    }
-
     setSaving(true);
     try {
       if (editId) {
@@ -204,13 +191,20 @@ export default function AddTransactionScreen() {
           description: description.trim(),
           date: date.toISOString(),
           is_recurring: isRecurring,
-          recurring_day: isRecurring ? recurringDay : null,
+          recurring_day: isRecurring ? date.getDate() : null,
           receipt_image: receiptImage,
         });
       }
       router.back();
     } catch (e) {
-      setError(apiErrorMessage(e, 'Nie udało się zapisać transakcji. Spróbuj ponownie.'));
+      if (isProLimitError(e)) {
+        promptPro(
+          'W wersji darmowej możesz mieć 3 stałe płatności. Wyłącz „Powtarzaj co miesiąc” albo przejdź na CashFlo Pro.',
+          () => router.push('/pro/upgrade')
+        );
+      } else {
+        setError(apiErrorMessage(e, 'Nie udało się zapisać transakcji. Spróbuj ponownie.'));
+      }
     } finally {
       setSaving(false);
     }
@@ -218,8 +212,8 @@ export default function AddTransactionScreen() {
 
   const handleDelete = () => {
     if (!editId) return;
-    const extra = original?.is_recurring
-      ? ' To transakcja cykliczna: kolejne nie będą już dodawane, a wcześniejsze zostaną.'
+    const extra = original?.recurring_id || original?.is_recurring
+      ? ' Ta transakcja pochodzi ze stałej płatności. Kolejne nadal będą dodawane; wyłączysz je w Stałych płatnościach.'
       : '';
     confirmAction('Usuń transakcję', `Tego nie da się cofnąć.${extra}`, 'Usuń', async () => {
       setDeleting(true);
@@ -353,32 +347,28 @@ export default function AddTransactionScreen() {
               <Ionicons name="repeat" size={22} color={colors.primary} />
               <View style={styles.optionText}>
                 <Text style={styles.optionTitle}>Powtarzaj co miesiąc</Text>
-                <Text style={styles.optionSubtitle}>Np. czynsz, abonament, pensja</Text>
+                <Text style={styles.optionSubtitle}>
+                  {isRecurring
+                    ? `Kolejne płatności dodamy same, ${date.getDate()}. dnia każdego miesiąca.`
+                    : 'Np. czynsz, abonament, pensja'}
+                </Text>
               </View>
               <Switch
                 value={isRecurring}
-                onValueChange={handleRecurringToggle}
+                onValueChange={setIsRecurring}
                 trackColor={{ false: colors.border, true: colors.primary }}
                 thumbColor="#FFFFFF"
               />
             </View>
-            {isRecurring ? (
-              <TouchableOpacity style={styles.dayButton} onPress={() => setShowDayPicker(true)}>
-                <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-                <Text style={styles.dayButtonText}>
-                  {recurringDay ? `Co miesiąc, ${recurringDay}. dnia` : 'Wybierz dzień miesiąca'}
-                </Text>
-                <Ionicons name="chevron-forward" size={18} color={colors.textLight} />
-              </TouchableOpacity>
-            ) : null}
           </View>
-        ) : original?.is_recurring || original?.recurring_parent_id ? (
-          <View style={[styles.optionCard, styles.optionRow]}>
+        ) : original?.recurring_id || original?.is_recurring || original?.recurring_parent_id ? (
+          <TouchableOpacity style={[styles.optionCard, styles.optionRow]} onPress={() => router.push('/recurring')} activeOpacity={0.7}>
             <Ionicons name="repeat" size={20} color={colors.textSecondary} />
             <Text style={[styles.optionSubtitle, { flex: 1, marginLeft: space.md }]}>
-              Transakcja cykliczna. Zmiany dotyczą tylko tego wpisu.
+              Część stałej płatności. Zmiany dotyczą tylko tego wpisu.
             </Text>
-          </View>
+            <Text style={styles.manageLink}>Zarządzaj</Text>
+          </TouchableOpacity>
         ) : null}
 
         {/* Receipt */}
@@ -424,54 +414,6 @@ export default function AddTransactionScreen() {
         </Modal>
       ) : null}
 
-      {/* Day of month for recurring transactions */}
-      <Modal
-        visible={showDayPicker}
-        transparent
-        animationType="slide"
-        onRequestClose={() => {
-          setShowDayPicker(false);
-          if (!recurringDay) setIsRecurring(false);
-        }}
-      >
-        <View style={styles.overlay}>
-          <View style={[styles.sheet, { paddingBottom: insets.bottom + space.lg }]}>
-            <View style={styles.sheetHeader}>
-              <Text style={styles.sheetTitle}>Którego dnia miesiąca?</Text>
-              <TouchableOpacity
-                onPress={() => {
-                  setShowDayPicker(false);
-                  if (!recurringDay) setIsRecurring(false);
-                }}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                accessibilityLabel="Zamknij"
-              >
-                <Ionicons name="close" size={24} color={colors.text} />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.daysGrid}>
-              {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => {
-                const selected = recurringDay === day;
-                return (
-                  <TouchableOpacity
-                    key={day}
-                    style={[styles.dayChip, selected && { backgroundColor: colors.primary, borderColor: colors.primary }]}
-                    onPress={() => {
-                      setRecurringDay(day);
-                      setShowDayPicker(false);
-                    }}
-                  >
-                    <Text style={[styles.dayChipText, selected && { color: colors.onPrimary }]}>{day}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-            <Text style={styles.hint}>
-              Gdy miesiąc jest krótszy (np. 31. dnia w kwietniu), transakcja doda się ostatniego dnia miesiąca.
-            </Text>
-          </View>
-        </View>
-      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -516,15 +458,7 @@ const createStyles = (colors: ThemeColors) =>
     optionText: { flex: 1, marginHorizontal: space.md },
     optionTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
     optionSubtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },
-    dayButton: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      backgroundColor: colors.primarySoft,
-      borderRadius: radius.sm,
-      padding: space.md,
-      marginTop: space.md,
-    },
-    dayButtonText: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.text, marginLeft: space.sm },
+    manageLink: { fontSize: 14, fontWeight: '700', color: colors.primary, marginLeft: space.sm },
     receiptImage: { width: '100%', height: 200, borderRadius: radius.md, backgroundColor: colors.surfaceAlt },
     removeReceipt: {
       position: 'absolute',
@@ -561,18 +495,4 @@ const createStyles = (colors: ThemeColors) =>
     sheetHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: space.md },
     sheetTitle: { fontSize: 18, fontWeight: '800', color: colors.text },
     sheetDone: { fontSize: 16, fontWeight: '700', color: colors.primary },
-    daysGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' },
-    dayChip: {
-      width: '13%',
-      aspectRatio: 1,
-      borderRadius: radius.sm,
-      borderWidth: 1,
-      borderColor: colors.border,
-      backgroundColor: colors.surface,
-      alignItems: 'center',
-      justifyContent: 'center',
-      marginBottom: space.sm,
-    },
-    dayChipText: { fontSize: 15, fontWeight: '600', color: colors.text },
-    hint: { fontSize: 12, color: colors.textSecondary, lineHeight: 18, marginTop: space.sm },
   });

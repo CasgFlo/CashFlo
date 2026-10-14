@@ -63,6 +63,9 @@ export default function TermsOfService() {
         <Text style={styles.listItem}>• Ustalanie celów oszczędnościowych</Text>
         <Text style={styles.listItem}>• Monitorowanie budżetu miesięcznego</Text>
         <Text style={styles.listItem}>• Analizę wydatków według kategorii</Text>
+        <Text style={styles.listItem}>• Import historii rachunku i arkuszy kalkulacyjnych (CSV, Excel)</Text>
+        <Text style={styles.listItem}>• Stałe płatności i wykrywanie subskrypcji</Text>
+        <Text style={styles.listItem}>• Miesięczne podsumowania wydatków z wnioskami</Text>
         <Text style={styles.listItem}>• Obliczanie dziennego limitu "Safe-to-Spend"</Text>
 
         <Text style={styles.sectionTitle}>4. Rejestracja i Konto</Text>

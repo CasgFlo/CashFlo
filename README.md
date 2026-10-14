@@ -25,6 +25,42 @@ npm install
 npx expo start
 ```
 
+## Funkcje i plan darmowy / Pro
+
+| Funkcja | Darmowy | Pro |
+| --- | --- | --- |
+| Import historii z banku (CSV) i arkuszy Excel (.xlsx) | 1 import (podgląd zawsze) | bez limitu |
+| Stałe płatności i wykrywanie subskrypcji | 3 aktywne | bez limitu |
+| Podsumowanie miesiąca | sumy, kategorie, 1 wniosek | porównania, wszystkie wnioski, porada |
+| Limity budżetu dla kategorii | – | tak |
+| Eksport do Excela | – | tak |
+| Cele / własne kategorie | 1 / 3 | bez limitu |
+
+Limity są sprawdzane na serwerze (`FREE_*` w `backend/server.py`).
+
+- **Import** (`backend/importer.py`): rozpoznaje kolumny po nagłówkach (mBank, ING, PKO BP, Pekao, Millennium,
+  Revolut i własne arkusze), a bez nagłówków po zawartości. Kategorie dobiera z nazw sklepów, duplikaty
+  pomija. Plik jest trzymany w bazie maks. 2 godziny (`import_sessions`, indeks TTL). Import można cofnąć.
+- **Stałe płatności** (`recurring_payments`): należne płatności dodają się jako transakcje przy każdym
+  pobraniu danych przez aplikację (bez zadań w tle). Wykrywanie subskrypcji: `backend/insights.py`.
+- **Podsumowanie miesiąca**: `GET /api/reports/monthly?year=&month=`, teksty w `backend/insights.py`.
+- **Eksport**: `POST /api/export/link` daje link ważny 10 minut, telefon pobiera plik w przeglądarce.
+
+## Testy i automatyczne sprawdzanie
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+MONGO_URL=mongodb://localhost:27017 JWT_SECRET_KEY=test python -m pytest tests
+```
+
+Testy API (`tests/test_api.py`) potrzebują MongoDB i bez `MONGO_URL` są pomijane.
+
+Na GitHubie przy każdym pushu (`.github/workflows/ci.yml`): testy serwera z prawdziwą bazą,
+kontrola typów aplikacji i zbudowanie paczki na Androida. Gdy zmienia się `package.json`, bot sam
+odświeża `yarn.lock`. Workflow `screenshots.yml` (gałąź `pro-features`) robi zrzuty ekranów wersji
+web z przykładowymi danymi i zapisuje je na gałęzi `ci-screenshots`.
+
 ## Konto administratora
 
 Uprawnienia admina są zapisane tylko w bazie danych. Zarejestruj się w aplikacji, potem:

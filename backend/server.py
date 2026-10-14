@@ -420,6 +420,19 @@ DEFAULT_CATEGORIES = [
 # must never grant admin access.)
 
 
+# ============= HEALTH CHECK =============
+
+@api_router.get("/health")
+async def health():
+    """Used by the hosting platform to check the server and its database are up."""
+    try:
+        await db.command("ping")
+    except Exception as e:
+        logger.error(f"Health check: database unreachable: {e}")
+        raise HTTPException(status_code=503, detail="Database unreachable")
+    return {"status": "ok"}
+
+
 # ============= AUTH ENDPOINTS =============
 
 @api_router.post("/auth/register", response_model=TokenResponse)

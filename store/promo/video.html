@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1080px; height: 1920px; overflow: hidden; background: #0D6A54; }
+  body { position: relative; font-family: "Inter", sans-serif; color: #fff; -webkit-font-smoothing: antialiased; }
+  .abs { position: absolute; }
+  h1 { font: 800 104px/1.04 "Inter Display", "Inter", sans-serif; letter-spacing: -0.03em; }
+  h2 { font: 800 86px/1.06 "Inter Display", "Inter", sans-serif; letter-spacing: -0.03em; }
+  p.sub { font: 500 40px/1.3 "Inter", sans-serif; color: #D8EEE6; margin-top: 26px; }
+  mark {
+    color: #15201B; padding: 0 0.08em; margin: 0 -0.04em;
+    background: linear-gradient(transparent 8%, #F5C344 8%, #F5C344 92%, transparent 92%) no-repeat 0 0 / 0% 100%;
+    -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  }
+  .brand { display: flex; align-items: center; gap: 16px; font: 800 52px/1 "Inter Display", sans-serif; letter-spacing: -0.02em; }
+  .dot { width: 26px; height: 26px; border-radius: 50%; background: #F5C344; box-shadow: 0 0 0 6px #15201B; }
+  .line { display: block; overflow: hidden; padding-bottom: 0.08em; }
+  .line > span { display: inline-block; }
+  #phone { left: 200px; top: 760px; width: 680px; border-radius: 64px; border: 16px solid #15201B; background: #15201B;
+           overflow: hidden; box-shadow: 0 40px 100px rgba(0,0,0,.4); }
+  #phone .screen { position: relative; width: 100%; aspect-ratio: 1080 / 1920; }
+  #phone img { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .feature { left: 84px; top: 250px; width: 912px; }
+  #cta { left: 84px; top: 640px; width: 912px; }
+  .pill { display: inline-flex; align-items: center; gap: 14px; margin-top: 56px; padding: 18px 30px; border-radius: 999px;
+          background: rgba(255,255,255,.14); font: 600 40px/1.2 "Inter", sans-serif; }
+  .url { display: inline-block; margin-top: 44px; padding: 26px 44px; border-radius: 24px; background: #fff; color: #0D6A54;
+         font: 800 72px/1 "Inter Display", sans-serif; letter-spacing: -0.02em; }
+  .small { font: 500 34px/1.3 "Inter", sans-serif; color: #D8EEE6; margin-top: 34px; }
+</style>
+</head>
+<body>
+  <div id="brand" class="abs brand" style="left:84px; top:120px"><span class="dot"></span>Cashflo</div>
+
+  <h1 id="hook" class="abs" style="left:84px; top:560px; width:912px">
+    <span class="line"><span>Wiesz,</span></span>
+    <span class="line"><span><mark id="hookmark">dokąd</mark> idą</span></span>
+    <span class="line"><span>Twoje pieniądze?</span></span>
+  </h1>
+
+  <div id="f0" class="abs feature"><h2>Wszystko na <mark>jednym</mark> ekranie</h2><p class="sub">Saldo, budżet i najbliższe płatności</p></div>
+  <div id="f1" class="abs feature"><h2>Historia z banku <mark>w&nbsp;minutę</mark></h2><p class="sub">Wgraj plik CSV lub Excel, kategorie dobiorą się same</p></div>
+  <div id="f2" class="abs feature"><h2>Ile <mark>naprawdę</mark> kosztują subskrypcje?</h2><p class="sub">Netflix, Spotify, czynsz – suma na cały rok</p></div>
+  <div id="f3" class="abs feature"><h2>Co miesiąc <mark>konkretne</mark> wnioski</h2><p class="sub">Co wzrosło, co spadło i gdzie odłożyć</p></div>
+
+  <div id="phone" class="abs"><div class="screen">
+    <img id="s0" src="img/01-start.png">
+    <img id="s1" src="img/02-import.png">
+    <img id="s2" src="img/03-stale.png">
+    <img id="s3" src="img/04-raport.png">
+  </div></div>
+
+  <div id="cta" class="abs">
+    <div class="brand" id="ctabrand" style="font-size:64px"><span class="dot"></span>Cashflo</div>
+    <h1 id="ctatitle" style="margin-top:56px">Zapisz się na <mark id="ctamark">wczesny dostęp</mark></h1>
+    <div class="pill" id="ctapill">★ Testerzy mają Pro za darmo</div><br>
+    <div class="url" id="ctaurl">cashflo.cash</div>
+    <p class="small" id="ctasmall">Aplikacja na Androida · zapis zajmuje minutę</p>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const seg = (t, a, b) => clamp((t - a) / (b - a));
+  const out3 = (x) => 1 - Math.pow(1 - x, 3);
+  const inOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+  const show = (el, opacity, dy = 0, scale = 1) => {
+    el.style.opacity = opacity;
+    el.style.transform = `translateY(${dy}px) scale(${scale})`;
+    el.style.visibility = opacity <= 0.001 ? 'hidden' : 'visible';
+  };
+  const sweep = (el, p) => { el.style.backgroundSize = `${(out3(p) * 100).toFixed(2)}% 100%`; };
+
+  // Feature scenes: [start, end] in seconds
+  const scenes = [[2.8, 6.2], [6.2, 9.8], [9.8, 13.4], [13.4, 17.0]];
+  const END = 21.5;
+
+  window.render = (t) => {
+    // Hook
+    const hookLines = document.querySelectorAll('#hook .line > span');
+    hookLines.forEach((s, i) => {
+      const p = out3(seg(t, 0.15 + i * 0.2, 0.65 + i * 0.2));
+      s.style.transform = `translateY(${(1 - p) * 110}%)`;
+    });
+    sweep($('hookmark'), seg(t, 0.9, 1.5));
+    const hookOut = inOut(seg(t, 2.45, 2.85));
+    show($('hook'), 1 - hookOut, -60 * hookOut);
+
+    // Brand at the top: visible until the call to action
+    const brandOut = inOut(seg(t, 16.6, 17.0));
+    show($('brand'), clamp(seg(t, 0, 0.4)) * (1 - brandOut), -20 * brandOut);
+
+    // Feature headlines and screens
+    scenes.forEach(([a, b], i) => {
+      const inP = out3(seg(t, a, a + 0.5));
+      const outP = inOut(seg(t, b - 0.35, b));
+      const el = $('f' + i);
+      show(el, inP * (1 - outP), (1 - inP) * 50 - outP * 50);
+      el.querySelector('p.sub').style.opacity = out3(seg(t, a + 0.2, a + 0.7));
+      sweep(el.querySelector('mark'), seg(t, a + 0.45, a + 1.0));
+      // screen: fade in at the start of its scene (the first one is shown when the phone arrives)
+      const fade = i === 0 ? 1 : inOut(seg(t, a - 0.35, a));
+      const gone = i === scenes.length - 1 ? 0 : inOut(seg(t, b - 0.35, b));
+      $('s' + i).style.opacity = clamp(fade);
+      $('s' + i).style.zIndex = i;
+      if (i < scenes.length - 1 && gone >= 1) $('s' + i).style.opacity = 0;
+    });
+
+    // Phone: rises in, slowly zooms, drops out before the call to action
+    const pin = out3(seg(t, 2.55, 3.35));
+    const pout = inOut(seg(t, 16.55, 17.15));
+    const current = scenes.findIndex(([a, b]) => t >= a - 0.35 && t < b);
+    const local = current >= 0 ? seg(t, scenes[current][0], scenes[current][1]) : 0;
+    const scale = 1 + 0.025 * local;
+    show($('phone'), pin * (1 - pout), (1 - pin) * 1100 + pout * 900, scale);
+
+    // Call to action
+    const c = (a, b) => out3(seg(t, a, b));
+    show($('cta'), c(17.0, 17.5));
+    show($('ctabrand'), c(17.0, 17.5), (1 - c(17.0, 17.5)) * 40);
+    show($('ctatitle'), c(17.15, 17.7), (1 - c(17.15, 17.7)) * 60);
+    sweep($('ctamark'), seg(t, 17.7, 18.3));
+    show($('ctapill'), c(18.1, 18.6), (1 - c(18.1, 18.6)) * 40);
+    show($('ctaurl'), c(18.4, 18.9), (1 - c(18.4, 18.9)) * 40, 0.92 + 0.08 * c(18.4, 18.9));
+    show($('ctasmall'), c(18.7, 19.2));
+  };
+  window.VIDEO_END = END;
+  render(0);
+</script>
+</body>
+</html>

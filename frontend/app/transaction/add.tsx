@@ -27,6 +27,7 @@ import { Category, Transaction } from '../../utils/types';
 import { parseAmount, sanitizeAmountInput, apiErrorMessage, parseServerDate, isProLimitError } from '../../utils/format';
 import { confirmAction, showMessage } from '../../utils/confirm';
 import { promptPro } from '../../utils/pro';
+import { looksLikeSubscription } from '../../utils/subscriptions';
 import { ScreenHeader, SegmentedControl, Chip, Button, space, radius, tabular } from '../../components/ui';
 
 type TxType = 'expense' | 'income';
@@ -55,6 +56,9 @@ export default function AddTransactionScreen() {
   const [date, setDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [isRecurring, setIsRecurring] = useState(false);
+  // null = not chosen yet: guessed from the name and category (Netflix, Spotify, Rozrywka...)
+  const [subscriptionChoice, setSubscriptionChoice] = useState<boolean | null>(null);
+  const isSubscription = type === 'expense' && (subscriptionChoice ?? looksLikeSubscription(description, category));
   const [receiptImage, setReceiptImage] = useState<string | null>(null);
   const [receiptChanged, setReceiptChanged] = useState(false);
   const [original, setOriginal] = useState<Transaction | null>(null);
@@ -192,6 +196,7 @@ export default function AddTransactionScreen() {
           date: date.toISOString(),
           is_recurring: isRecurring,
           recurring_day: isRecurring ? date.getDate() : null,
+          is_subscription: isRecurring ? isSubscription : null,
           receipt_image: receiptImage,
         });
       }
@@ -360,6 +365,21 @@ export default function AddTransactionScreen() {
                 thumbColor="#FFFFFF"
               />
             </View>
+            {isRecurring && type === 'expense' ? (
+              <View style={[styles.optionRow, styles.optionDivider]}>
+                <Ionicons name="play-circle-outline" size={22} color={colors.primary} />
+                <View style={styles.optionText}>
+                  <Text style={styles.optionTitle}>To subskrypcja</Text>
+                  <Text style={styles.optionSubtitle}>Np. Netflix, Spotify, siłownia. Pokażemy, ile kosztują w roku.</Text>
+                </View>
+                <Switch
+                  value={isSubscription}
+                  onValueChange={setSubscriptionChoice}
+                  trackColor={{ false: colors.border, true: colors.primary }}
+                  thumbColor="#FFFFFF"
+                />
+              </View>
+            ) : null}
           </View>
         ) : original?.recurring_id || original?.is_recurring || original?.recurring_parent_id ? (
           <TouchableOpacity style={[styles.optionCard, styles.optionRow]} onPress={() => router.push('/recurring')} activeOpacity={0.7}>
@@ -455,6 +475,7 @@ const createStyles = (colors: ThemeColors) =>
       marginTop: space.lg,
     },
     optionRow: { flexDirection: 'row', alignItems: 'center' },
+    optionDivider: { borderTopWidth: 1, borderTopColor: colors.divider, marginTop: space.md, paddingTop: space.md },
     optionText: { flex: 1, marginHorizontal: space.md },
     optionTitle: { fontSize: 15, fontWeight: '600', color: colors.text },
     optionSubtitle: { fontSize: 13, color: colors.textSecondary, marginTop: 2 },

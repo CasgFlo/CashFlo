@@ -133,6 +133,25 @@ def test_monthly_report_for_finished_month_pro():
     assert report["locked"] is False
 
 
+def test_yearly_fixed_costs_include_bills_and_subscriptions():
+    september, october = _september_and_october()
+    recurring = [
+        {"amount": 1800, "frequency": "monthly", "is_subscription": False, "active": True, "type": "expense"},
+        {"amount": 49, "frequency": "monthly", "is_subscription": True, "active": True, "type": "expense"},
+        {"amount": 5000, "frequency": "monthly", "is_subscription": False, "active": True, "type": "income"},
+    ]
+    report = build_monthly_report(2026, 10, october, september, today=date(2026, 11, 3), recurring=recurring, is_pro=True)
+    texts = [i["text"].replace("\u00a0", " ") for i in report["insights"]]
+    assert any("Stałe płatności i subskrypcje to 1 849 zł miesięcznie, czyli 22 188 zł rocznie (same subskrypcje: 588 zł rocznie)" in t
+               for t in texts), texts
+    assert report["fixed_costs_monthly"] == 1849 and report["subscriptions_monthly"] == 49
+
+    only_bills = build_monthly_report(2026, 10, october, september, today=date(2026, 11, 3),
+                                      recurring=recurring[:1], is_pro=True)
+    texts = [i["text"].replace("\u00a0", " ") for i in only_bills["insights"]]
+    assert any("Stałe płatności to 1 800 zł miesięcznie, czyli 21 600 zł rocznie" in t for t in texts), texts
+
+
 def test_monthly_report_free_shows_a_taste():
     september, october = _september_and_october()
     report = build_monthly_report(2026, 10, october, september, today=date(2026, 11, 3), is_pro=False)

@@ -349,10 +349,14 @@ def build_monthly_report(
         else:
             add("checkmark-circle", f"Budżet dotrzymany: zostało {pln(budget_info['left'])}.", "positive", "budget")
 
-    if subs_monthly > 0:
+    # Yearly cost of everything that repeats: bills and subscriptions together
+    if fixed_monthly > 0 and subs_monthly >= fixed_monthly - 0.005:
         add("repeat", f"Subskrypcje kosztują {pln(subs_monthly)} miesięcznie, czyli {pln(subs_monthly * 12)} rocznie.", "neutral", "subscriptions")
-    elif fixed_monthly > 0 and expenses > 0:
-        add("repeat", f"Stałe płatności to ok. {pln(fixed_monthly)} miesięcznie.", "neutral", "subscriptions")
+    elif fixed_monthly > 0 and subs_monthly > 0:
+        add("repeat", f"Stałe płatności i subskrypcje to {pln(fixed_monthly)} miesięcznie, czyli {pln(fixed_monthly * 12)} rocznie "
+                      f"(same subskrypcje: {pln(subs_monthly * 12)} rocznie).", "neutral", "subscriptions")
+    elif fixed_monthly > 0:
+        add("repeat", f"Stałe płatności to {pln(fixed_monthly)} miesięcznie, czyli {pln(fixed_monthly * 12)} rocznie.", "neutral", "subscriptions")
 
     if categories:
         top = categories[0]

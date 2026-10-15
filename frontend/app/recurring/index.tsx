@@ -154,16 +154,16 @@ export default function RecurringScreen() {
 
         {summary && summary.active_count > 0 ? (
           <View style={styles.hero}>
-            <Text style={styles.heroLabel}>Stałe wydatki co miesiąc</Text>
+            <Text style={styles.heroLabel}>Stałe płatności i subskrypcje</Text>
             <Text style={[styles.heroAmount, tabular]} adjustsFontSizeToFit numberOfLines={1}>
               {formatCurrency(summary.monthly_expenses)}
             </Text>
-            <Text style={[styles.heroSub, tabular]}>czyli {formatCurrency(summary.yearly_expenses, { hideZeroDecimals: true })} rocznie</Text>
+            <Text style={[styles.heroSub, tabular]}>miesięcznie, czyli {formatCurrency(summary.yearly_expenses, { hideZeroDecimals: true })} rocznie</Text>
             {summary.subscriptions_count > 0 ? (
               <View style={styles.heroPill}>
                 <Ionicons name="play-circle-outline" size={16} color={colors.onPrimary} />
                 <Text style={[styles.heroPillText, tabular]}>
-                  Subskrypcje: {formatCurrency(summary.subscriptions_monthly)} / mies. ·{' '}
+                  w tym subskrypcje: {formatCurrency(summary.subscriptions_monthly)} / mies. ·{' '}
                   {formatCurrency(summary.subscriptions_monthly * 12, { hideZeroDecimals: true })} rocznie
                 </Text>
               </View>

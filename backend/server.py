@@ -185,6 +185,8 @@ class TransactionCreate(BaseModel):
     date: datetime
     is_recurring: bool = False
     recurring_day: Optional[int] = Field(default=None, ge=1, le=31)  # Day of month for recurring transactions
+    # With is_recurring: mark the payment as a subscription. None = guess from the name (Netflix, Spotify...)
+    is_subscription: Optional[bool] = None
     receipt_image: Optional[str] = None  # data URL (base64)
 
 class TransactionUpdate(BaseModel):
@@ -766,6 +768,12 @@ async def create_transaction(
         await ensure_can_add_recurring(current_user)
         first_day = transaction.date.date()
         anchor = transaction.recurring_day or first_day.day
+        if transaction.type != "expense":
+            is_subscription = False
+        elif transaction.is_subscription is not None:
+            is_subscription = transaction.is_subscription
+        else:
+            is_subscription = insights.brand_of(transaction_dict["description"]) is not None
         recurring_doc = {
             "user_id": user_id,
             "name": transaction_dict["description"] or transaction_dict["category"],
@@ -775,7 +783,7 @@ async def create_transaction(
             "frequency": "monthly",
             "anchor_day": anchor,
             "next_date": insights.at_noon(insights.next_occurrence(first_day, "monthly", anchor)),
-            "is_subscription": False,
+            "is_subscription": is_subscription,
             "active": True,
             "source": "transaction",
             "created_at": now,

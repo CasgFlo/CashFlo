@@ -79,6 +79,24 @@ def test_repeat_monthly_creates_a_recurring_payment(client):
     assert len(client.get("/api/transactions", headers=h).json()) == 1
 
 
+def test_repeated_transaction_can_be_a_subscription(client):
+    h = make_user(client, pro=True)
+    base = {"type": "expense", "date": noon(), "is_recurring": True, "recurring_day": datetime.utcnow().day}
+    # Known service: marked as a subscription without asking
+    client.post("/api/transactions", headers=h, json={**base, "amount": 43, "category": "Rozrywka", "description": "Netflix"})
+    # The user's own choice wins
+    client.post("/api/transactions", headers=h, json={**base, "amount": 120, "category": "Zdrowie",
+                                                      "description": "Siłownia", "is_subscription": True})
+    client.post("/api/transactions", headers=h, json={**base, "amount": 60, "category": "Dom i Rachunki",
+                                                      "description": "Spotify rodzinne", "is_subscription": False})
+    client.post("/api/transactions", headers=h, json={**base, "amount": 1800, "category": "Dom i Rachunki", "description": "Czynsz"})
+    data = client.get("/api/recurring", headers=h).json()
+    subs = {i["name"]: i["is_subscription"] for i in data["items"]}
+    assert subs == {"Netflix": True, "Siłownia": True, "Spotify rodzinne": False, "Czynsz": False}
+    assert data["summary"]["subscriptions_monthly"] == 163
+    assert data["summary"]["monthly_expenses"] == 2023 and data["summary"]["yearly_expenses"] == 24276
+
+
 def test_due_payment_is_added_and_free_limit(client):
     h = make_user(client)
     r = client.post("/api/recurring", headers=h, json={

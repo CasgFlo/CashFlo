@@ -7,3 +7,8 @@
 - `img/` – zrzuty aplikacji z przykładowymi danymi (z workflow Screenshots, `store.mjs`)
 
 Czcionki: Inter i Inter Display (muszą być zainstalowane w systemie).
+
+## Wersja z lektorem
+
+- `video-glos.html` – te same sceny, przesunięte pod nagranie głosu (import od 5,0 s, wezwanie do zapisu od 16,5 s), 22,7 s
+- `render_voice.py` – `python3 render_voice.py video-glos.html <plik z głosem> wynik.mp4`; głos jest wyrównany do -14 LUFS (głośność Reels), 48 kHz stereo, H.264

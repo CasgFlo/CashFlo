@@ -66,6 +66,15 @@ await shoot(t.pro, '10-budget-pro', '/budget/settings', { height: 1500 });
 await shoot(t.pro, '11-more', '/more', { height: 1300 });
 await shoot(t.pro, '12-add-transaction', '/transaction/add', { height: 1100 });
 await shoot(t.pro, '13-home-dark', '/', { dark: true });
+await shoot(t.pro, '14-add-subscription', '/transaction/add', {
+  height: 1300,
+  action: async (page) => {
+    await page.getByPlaceholder('0,00').fill('43');
+    await page.getByPlaceholder('np. zakupy w Lidlu').fill('Netflix');
+    await page.getByRole('switch').first().click();
+    await page.waitForTimeout(600);
+  },
+});
 
 // Free user
 await shoot(t.free, '20-report-free', report, { height: 1700 });

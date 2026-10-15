@@ -230,6 +230,39 @@ def test_free_plan_gates(client):
     assert report["locked"] is True and len(report["insights"]) <= 1
 
 
+def test_beta_period_gives_everyone_pro(client, monkeypatch):
+    h = make_user(client)
+    today = datetime.utcnow().date()
+    monkeypatch.setattr(server, "BETA_PRO_UNTIL", today)  # the last day still counts
+    me = client.get("/api/auth/me", headers=h).json()
+    assert me["is_pro"] is True and me["pro_source"] == "beta" and me["beta_pro_until"] == today.isoformat()
+    assert client.post("/api/export/link", headers=h).status_code == 200
+
+    monkeypatch.setattr(server, "BETA_PRO_UNTIL", today - timedelta(days=1))
+    me = client.get("/api/auth/me", headers=h).json()
+    assert me["is_pro"] is False and me["pro_source"] is None and me["beta_pro_until"] is None
+    assert client.post("/api/export/link", headers=h).status_code == 403
+
+
+def test_read_date_setting(monkeypatch):
+    monkeypatch.setenv("SOME_DAY", "2026-12-31")
+    assert server.read_date_setting("SOME_DAY").isoformat() == "2026-12-31"
+    monkeypatch.setenv("SOME_DAY", "31.12.2026")
+    assert server.read_date_setting("SOME_DAY") is None
+    monkeypatch.delenv("SOME_DAY")
+    assert server.read_date_setting("SOME_DAY") is None
+
+
+def test_deletion_page_on_the_site_can_call_the_api(client):
+    r = client.options("/api/auth/delete-account", headers={
+        "Origin": "https://cashflo.cash",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": "authorization,content-type",
+    })
+    assert r.status_code == 200
+    assert r.headers["access-control-allow-origin"] in ("*", "https://cashflo.cash")
+
+
 def test_stats_and_account_deletion_remove_everything(client):
     h = make_user(client)
     client.post("/api/transactions", headers=h, json={"amount": 5000, "type": "income", "category": "Wypłata", "date": noon()})

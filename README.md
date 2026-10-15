@@ -89,6 +89,16 @@ sprawdzeniu płatności przez aplikację albo po podpisanym webhooku (cokolwiek 
 Uwaga: przed publikacją w App Store sprzedaż Pro na iPhonie trzeba dostosować do zasad Apple
 (zakupy w aplikacji albo zgłoszony u Apple link do płatności zewnętrznej w UE).
 
+## Google Play
+
+- Paczkę do Sklepu Play (AAB) buduje profil `production` w `eas.json`. Ma ustawione `EXPO_PUBLIC_STORE=play`,
+  więc ukrywa zakup Pro przez Stripe i zarządzanie subskrypcją (Google wymaga swoich płatności w aplikacji).
+  Przy każdej nowej paczce podnieś `android.versionCode` w `app.json`.
+- Okres testów: `BETA_PRO_UNTIL=2026-12-31` na serwerze daje wszystkim Pro za darmo do tego dnia włącznie
+  (`pro_source: "beta"` w `/api/auth/me`). Usuń zmienną, gdy będą płatności w Sklepie Play.
+- Wymagane adresy: polityka prywatności `https://cashflo.cash/prywatnosc`,
+  usuwanie konta `https://cashflo.cash/usun-konto` (formularz woła `/api/auth/login` i `/api/auth/delete-account`).
+
 ## Reset hasła
 
 Kody do zmiany hasła są wysyłane e-mailem przez SMTP (`SMTP_*` w `backend/.env`).

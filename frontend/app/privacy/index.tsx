@@ -35,7 +35,9 @@ export default function PrivacyPolicy() {
         style={styles.content}
         contentContainerStyle={[styles.contentContainer, { paddingBottom: insets.bottom + 40 }]}
       >
-        <Text style={styles.lastUpdated}>Ostatnia aktualizacja: Październik 2026</Text>
+        <Text style={styles.lastUpdated}>
+          Ostatnia aktualizacja: Październik 2026 · Pełna wersja: cashflo.cash/prywatnosc
+        </Text>
 
         <Text style={styles.intro}>
           Ochrona Twoich danych osobowych jest dla nas priorytetem. Niniejsza Polityka 
@@ -62,8 +64,7 @@ export default function PrivacyPolicy() {
         </Text>
 
         <Text style={styles.subTitle}>2.2. Dane zbierane automatycznie:</Text>
-        <Text style={styles.listItem}>• Informacje o urządzeniu (model, system operacyjny)</Text>
-        <Text style={styles.listItem}>• Dane o korzystaniu z aplikacji (statystyki użytkowania)</Text>
+        <Text style={styles.listItem}>• Daty i liczba logowań (bezpieczeństwo konta i statystyki powrotów do aplikacji)</Text>
         <Text style={styles.listItem}>• Adres IP</Text>
 
         <Text style={styles.sectionTitle}>3. Cel przetwarzania danych</Text>
@@ -99,7 +100,7 @@ export default function PrivacyPolicy() {
         <Text style={styles.listItem}>• Szyfrowanie danych w tranzycie (SSL/TLS)</Text>
         <Text style={styles.listItem}>• Szyfrowanie haseł (bcrypt)</Text>
         <Text style={styles.listItem}>• Regularne kopie zapasowe</Text>
-        <Text style={styles.listItem}>• Ograniczony dostęp do danych dla pracowników</Text>
+        <Text style={styles.listItem}>• Dostęp do bazy danych ma tylko administrator</Text>
 
         <Text style={styles.sectionTitle}>7. Okres przechowywania danych</Text>
         <Text style={styles.paragraph}>

@@ -1,5 +1,14 @@
 import { Alert, Platform } from 'react-native';
-import { FREE_CUSTOM_CATEGORY_LIMIT, FREE_GOAL_LIMIT, FREE_IMPORT_LIMIT, FREE_RECURRING_LIMIT } from './types';
+import { format } from 'date-fns';
+import { pl } from 'date-fns/locale';
+import { FREE_CUSTOM_CATEGORY_LIMIT, FREE_GOAL_LIMIT, FREE_IMPORT_LIMIT, FREE_RECURRING_LIMIT, User } from './types';
+import { parseDay } from './format';
+
+/** "31 grudnia" when Pro is on thanks to the free test period, otherwise null. */
+export function betaProUntilLabel(user: User | null | undefined): string | null {
+  if (user?.pro_source !== 'beta' || !user.beta_pro_until) return null;
+  return format(parseDay(user.beta_pro_until), 'd MMMM', { locale: pl });
+}
 
 export interface ProFeature {
   icon: string;

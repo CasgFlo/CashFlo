@@ -39,7 +39,7 @@
         "CAMERA"
       ],
       "package": "cash.cashflo.mobile",
-      "versionCode": 2,
+      "versionCode": 3,
       "edgeToEdgeEnabled": true,
       "intentFilters": [
         {

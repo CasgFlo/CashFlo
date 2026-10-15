@@ -5,6 +5,10 @@ export interface User {
   is_pro: boolean;
   is_admin?: boolean;
   pro_plan?: 'monthly' | 'yearly' | 'lifetime' | null;
+  /** Why Pro is on: bought (or granted), admin, or the free test period ("beta") */
+  pro_source?: 'paid' | 'admin' | 'beta' | null;
+  /** Last day of the free test period, "YYYY-MM-DD" (only when pro_source is "beta") */
+  beta_pro_until?: string | null;
   can_manage_subscription?: boolean;
   created_at: string;
   last_login?: string | null;

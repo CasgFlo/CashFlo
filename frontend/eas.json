@@ -16,9 +16,11 @@
     },
     "production": {
       "env": {
-        "EXPO_PUBLIC_BACKEND_URL": "https://api-production-affb.up.railway.app"
+        "EXPO_PUBLIC_BACKEND_URL": "https://api-production-affb.up.railway.app",
+        "EXPO_PUBLIC_STORE": "play"
       },
       "android": {
+        "buildType": "app-bundle",
         "image": "latest"
       },
       "ios": {

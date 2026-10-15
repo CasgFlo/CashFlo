@@ -12,10 +12,10 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
-	@pages path / /ankieta /ankieta/
+	@pages path / /ankieta /ankieta/ /prywatnosc /prywatnosc/ /usun-konto /usun-konto/ /legal.css
 	header @pages Cache-Control "no-cache"
 
-	# /ankieta and /ankieta/ both open the survey
+	# /ankieta and /ankieta/ both open the survey (same for /prywatnosc and /usun-konto)
 	try_files {path} {path}/index.html
 	file_server
 

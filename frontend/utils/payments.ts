@@ -17,6 +17,13 @@ export const PLAN_NAMES: Record<ProPlan, string> = {
   lifetime: 'bezterminowy',
 };
 
+/**
+ * The Google Play build (EXPO_PUBLIC_STORE=play) must not sell Pro through Stripe:
+ * Google requires its own billing for digital subscriptions bought inside the app.
+ * There the purchase and subscription management screens are hidden.
+ */
+export const STRIPE_PURCHASES_ENABLED = process.env.EXPO_PUBLIC_STORE !== 'play';
+
 const isWeb = Platform.OS === 'web';
 const webOrigin = () => (isWeb && typeof window !== 'undefined' ? window.location.origin : undefined);
 

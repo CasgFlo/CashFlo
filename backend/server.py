@@ -82,6 +82,22 @@ SMTP_FROM = os.environ.get('SMTP_FROM', '') or SMTP_USER
 # Waitlist form on cashflo.cash (Tally): signed webhook -> thank-you e-mail to the person who signed up
 TALLY_SIGNING_SECRET = os.environ.get('TALLY_SIGNING_SECRET', '')
 
+def read_date_setting(name: str) -> Optional[date]:
+    """Reads a YYYY-MM-DD date from the environment; empty or invalid means not set."""
+    raw = os.environ.get(name, '').strip()
+    if not raw:
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        logging.getLogger(__name__).warning(f"{name} should look like 2026-12-31, got {raw!r}; ignoring it")
+        return None
+
+
+# Test period: everyone has Pro for free up to and including this day (e.g. BETA_PRO_UNTIL=2026-12-31).
+# Used while the app is in closed testing on Google Play, before in-app purchases exist there.
+BETA_PRO_UNTIL = read_date_setting('BETA_PRO_UNTIL')
+
 # Free plan limits
 FREE_GOAL_LIMIT = 1
 FREE_CUSTOM_CATEGORY_LIMIT = 3
@@ -138,6 +154,9 @@ class UserResponse(BaseModel):
     is_pro: bool = False
     is_admin: bool = False
     pro_plan: Optional[str] = None
+    # Why Pro is on: "paid" (or granted by an admin), "admin", "beta" (free test period), None when off
+    pro_source: Optional[str] = None
+    beta_pro_until: Optional[str] = None
     can_manage_subscription: bool = False
     created_at: datetime
     last_login: Optional[datetime] = None
@@ -366,13 +385,16 @@ def hash_reset_code(user_id: str, code: str) -> str:
 
 def user_to_response(user: dict) -> UserResponse:
     is_admin = user.get("is_admin", False)
+    source = pro_source(user)
     return UserResponse(
         id=str(user["_id"]),
         email=user["email"],
         name=user["name"],
-        is_pro=user.get("is_pro", False) or is_admin,
+        is_pro=source is not None,
         is_admin=is_admin,
         pro_plan=user.get("pro_plan"),
+        pro_source=source,
+        beta_pro_until=BETA_PRO_UNTIL.isoformat() if source == "beta" else None,
         can_manage_subscription=bool(user.get("stripe_customer_id") and user.get("stripe_subscription_id")),
         created_at=user["created_at"],
         last_login=user.get("last_login"),
@@ -380,8 +402,22 @@ def user_to_response(user: dict) -> UserResponse:
     )
 
 
+def beta_pro_active() -> bool:
+    return BETA_PRO_UNTIL is not None and datetime.utcnow().date() <= BETA_PRO_UNTIL
+
+
+def pro_source(user: dict) -> Optional[str]:
+    if user.get("is_pro", False):
+        return "paid"
+    if user.get("is_admin", False):
+        return "admin"
+    if beta_pro_active():
+        return "beta"
+    return None
+
+
 def is_pro_user(user: dict) -> bool:
-    return bool(user.get("is_pro", False) or user.get("is_admin", False))
+    return pro_source(user) is not None
 
 
 def validate_receipt(receipt: Optional[str]) -> None:

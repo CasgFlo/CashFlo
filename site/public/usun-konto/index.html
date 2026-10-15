@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Usuń konto – Cashflo</title>
+<meta name="description" content="Jak usunąć konto w aplikacji Cashflo i wszystkie zapisane w nim dane.">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0D6A54">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;800&family=Onest:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="/legal.css">
+</head>
+<body>
+<div class="page">
+  <header class="top">
+    <a class="brand" href="/" aria-label="Cashflo, strona główna"><span class="dot" aria-hidden="true"></span>Cashflo</a>
+    <a href="/prywatnosc">Polityka prywatności</a>
+  </header>
+
+  <main>
+    <span class="label">Aplikacja Cashflo · Dawid Trzeciak</span>
+    <h1 style="margin-top:10px">Usuń konto Cashflo</h1>
+    <p class="lead">Usunięcie konta kasuje wszystkie Twoje dane w aplikacji. Tego nie da się cofnąć. Nie musisz instalować aplikacji: wystarczy formularz poniżej.</p>
+
+    <section class="box" aria-labelledby="form-title">
+      <h2 id="form-title" style="margin-top:0">Usuń konto teraz</h2>
+      <p class="fine">Podaj e-mail i hasło, którymi logujesz się w aplikacji. Konto zniknie od razu.</p>
+      <form id="delete-form" novalidate>
+        <label class="field">E-mail
+          <input type="email" name="email" autocomplete="username" required>
+        </label>
+        <label class="field">Hasło
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="confirm" required>
+          <span>Rozumiem, że usunę konto i wszystkie dane na zawsze.</span>
+        </label>
+        <div id="form-msg" class="msg" role="status" aria-live="polite" hidden></div>
+        <button type="submit" class="danger" id="submit">Usuń konto na zawsze</button>
+      </form>
+      <p class="fine" style="margin-top:16px">Nie pamiętasz hasła? Zmień je w aplikacji („Nie pamiętasz hasła?” na ekranie logowania) albo napisz do nas, jak w sposobie 3 niżej.</p>
+    </section>
+
+    <h2>Inne sposoby</h2>
+    <ol>
+      <li><strong>W aplikacji:</strong> Więcej → Usuń konto (na samym dole ekranu), potem wpisz hasło.</li>
+      <li><strong>Formularz wyżej</strong> na tej stronie.</li>
+      <li><strong>E-mailem:</strong> napisz z adresu przypisanego do konta na <a class="mono" href="mailto:cashflo2026@gmail.com?subject=Usuni%C4%99cie%20konta">cashflo2026@gmail.com</a> z tematem „Usunięcie konta”. Usuniemy je w ciągu 7 dni i potwierdzimy to w odpowiedzi.</li>
+    </ol>
+
+    <h2>Co usuwamy, a co zostaje</h2>
+    <ul>
+      <li><strong>Usuwamy:</strong> konto (e-mail, imię, hasło), transakcje, zdjęcia paragonów, budżety i limity, cele, własne kategorie, stałe płatności oraz historię importów.</li>
+      <li><strong>Zostają tylko:</strong> zapisy płatności za Pro, bez adresu e-mail i bez powiązania z kontem, przez 5 lat, bo wymagają tego przepisy podatkowe.</li>
+    </ul>
+
+    <h2>Masz subskrypcję Pro?</h2>
+    <ul>
+      <li>Kupioną w aplikacji przez Stripe anulujemy automatycznie przy usuwaniu konta, więc nie pobierzemy kolejnych opłat.</li>
+      <li>Kupioną przez Sklep Google Play anuluj najpierw w Sklepie Play: profil → Płatności i subskrypcje → Subskrypcje. Usunięcie konta jej nie zatrzyma.</li>
+    </ul>
+    <p>Więcej o danych: <a href="/prywatnosc#usuniecie-konta">Polityka prywatności, punkt 7</a>.</p>
+  </main>
+
+  <footer class="foot">
+    <span>Cashflo · Dawid Trzeciak</span>
+    <span><a href="/">Strona główna</a> · <a href="/prywatnosc">Polityka prywatności</a> · cashflo2026@gmail.com</span>
+  </footer>
+</div>
+
+<script>
+  (function () {
+    var API = "https://api-production-affb.up.railway.app/api";
+    var form = document.getElementById("delete-form");
+    var msg = document.getElementById("form-msg");
+    var button = document.getElementById("submit");
+
+    function show(kind, text) {
+      msg.className = "msg " + kind;
+      msg.textContent = text;
+      msg.hidden = false;
+    }
+
+    function post(path, body, token) {
+      var headers = { "Content-Type": "application/json" };
+      if (token) headers.Authorization = "Bearer " + token;
+      return fetch(API + path, { method: "POST", headers: headers, body: JSON.stringify(body) });
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      var email = form.email.value.trim();
+      var password = form.password.value;
+      if (!email || !password) { show("error", "Wpisz e-mail i hasło."); return; }
+      if (!form.confirm.checked) { show("error", "Zaznacz, że rozumiesz, że tego nie da się cofnąć."); return; }
+
+      button.disabled = true;
+      button.textContent = "Usuwam…";
+      msg.hidden = true;
+
+      post("/auth/login", { email: email, password: password })
+        .then(function (res) {
+          if (res.status === 401 || res.status === 422) throw new Error("credentials");
+          if (!res.ok) throw new Error("server");
+          return res.json();
+        })
+        .then(function (data) {
+          return post("/auth/delete-account", { password: password }, data.access_token);
+        })
+        .then(function (res) {
+          if (res.status === 403) throw new Error("credentials");
+          if (res.status === 502) throw new Error("subscription");
+          if (!res.ok) throw new Error("server");
+          form.reset();
+          form.querySelectorAll("input, button").forEach(function (el) { el.disabled = true; });
+          button.textContent = "Konto usunięte";
+          show("ok", "Gotowe. Konto i wszystkie dane zostały usunięte. Aplikację możesz po prostu odinstalować.");
+        })
+        .catch(function (error) {
+          button.disabled = false;
+          button.textContent = "Usuń konto na zawsze";
+          if (error.message === "credentials") show("error", "Nieprawidłowy e-mail lub hasło.");
+          else if (error.message === "subscription") show("error", "Nie udało się anulować subskrypcji Pro, więc konto zostało bez zmian. Spróbuj za chwilę albo napisz na cashflo2026@gmail.com.");
+          else show("error", "Nie udało się połączyć z serwerem. Spróbuj za chwilę albo napisz na cashflo2026@gmail.com.");
+        });
+    });
+  })();
+</script>
+</body>
+</html>

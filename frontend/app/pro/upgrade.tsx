@@ -6,9 +6,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { ScreenHeader, Card, Button, space, radius } from '../../components/ui';
-import { PRO_PLANS, PLAN_NAMES, ProPlan, startCheckout, openSubscriptionPortal } from '../../utils/payments';
+import { PRO_PLANS, PLAN_NAMES, ProPlan, startCheckout, openSubscriptionPortal, STRIPE_PURCHASES_ENABLED } from '../../utils/payments';
 import { apiErrorMessage } from '../../utils/format';
-import { PRO_FEATURES } from '../../utils/pro';
+import { PRO_FEATURES, betaProUntilLabel } from '../../utils/pro';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -80,6 +80,7 @@ export default function ProUpgradeScreen() {
 
   if (user?.is_pro) {
     const proPlan = user.pro_plan as ProPlan | null | undefined;
+    const betaUntil = betaProUntilLabel(user);
     return (
       <View style={[styles.screen, { paddingTop: insets.top }]}>
         <ScrollView contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + space.xl }]}>
@@ -88,9 +89,11 @@ export default function ProUpgradeScreen() {
             <View style={styles.heroIcon}>
               <Ionicons name="checkmark" size={30} color={colors.onAccent} />
             </View>
-            <Text style={styles.heroTitle}>Masz CashFlo Pro</Text>
+            <Text style={styles.heroTitle}>{betaUntil ? 'Pro za darmo w testach' : 'Masz CashFlo Pro'}</Text>
             <Text style={styles.heroText}>
-              {proPlan === 'lifetime'
+              {betaUntil
+                ? `Do ${betaUntil} masz wszystkie funkcje Pro bez opłat. Dziękujemy, że testujesz Cashflo!`
+                : proPlan === 'lifetime'
                 ? 'Plan bezterminowy: Pro zostaje z Tobą na zawsze.'
                 : proPlan
                 ? `Plan ${PLAN_NAMES[proPlan]}. Dziękujemy za wsparcie!`
@@ -98,7 +101,7 @@ export default function ProUpgradeScreen() {
             </Text>
           </View>
           {featureList}
-          {user.can_manage_subscription ? (
+          {STRIPE_PURCHASES_ENABLED && user.can_manage_subscription ? (
             <>
               <Button title="Zarządzaj subskrypcją" icon="card-outline" variant="secondary" onPress={handleManage} loading={busy} />
               <Text style={styles.note}>Zmienisz tam kartę albo anulujesz subskrypcję. Pro działa do końca opłaconego okresu.</Text>
@@ -134,73 +137,84 @@ export default function ProUpgradeScreen() {
 
         {featureList}
 
-        <Text style={styles.sectionLabel}>Wybierz plan</Text>
-        {PRO_PLANS.map((p) => {
-          const selected = p.id === selectedPlan;
-          return (
-            <TouchableOpacity
-              key={p.id}
-              activeOpacity={0.85}
-              onPress={() => setSelectedPlan(p.id)}
-              style={[styles.planCard, selected && styles.planCardSelected]}
-              accessibilityRole="radio"
-              accessibilityState={{ selected }}
-            >
-              <View style={[styles.radio, selected && styles.radioSelected]}>
-                {selected ? <View style={styles.radioDot} /> : null}
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={styles.planTop}>
-                  <Text style={styles.planName}>{p.name}</Text>
-                  {p.badge ? (
-                    <View style={styles.badge}>
-                      <Text style={styles.badgeText}>{p.badge}</Text>
+        {!STRIPE_PURCHASES_ENABLED ? (
+          <Card style={styles.guarantee}>
+            <Ionicons name="time-outline" size={22} color={colors.primary} />
+            <Text style={styles.guaranteeText}>
+              Zakup Pro w aplikacji pojawi się wkrótce. Dopóki go nie ma, korzystasz z wersji darmowej bez żadnych opłat.
+            </Text>
+          </Card>
+        ) : (
+          <>
+            <Text style={styles.sectionLabel}>Wybierz plan</Text>
+            {PRO_PLANS.map((p) => {
+              const selected = p.id === selectedPlan;
+              return (
+                <TouchableOpacity
+                  key={p.id}
+                  activeOpacity={0.85}
+                  onPress={() => setSelectedPlan(p.id)}
+                  style={[styles.planCard, selected && styles.planCardSelected]}
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected }}
+                >
+                  <View style={[styles.radio, selected && styles.radioSelected]}>
+                    {selected ? <View style={styles.radioDot} /> : null}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.planTop}>
+                      <Text style={styles.planName}>{p.name}</Text>
+                      {p.badge ? (
+                        <View style={styles.badge}>
+                          <Text style={styles.badgeText}>{p.badge}</Text>
+                        </View>
+                      ) : null}
                     </View>
-                  ) : null}
-                </View>
-                {p.note ? <Text style={styles.planNote}>{p.note}</Text> : null}
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={styles.planPrice}>{p.price}</Text>
-                <Text style={styles.planPeriod}>{p.period}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
+                    {p.note ? <Text style={styles.planNote}>{p.note}</Text> : null}
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={styles.planPrice}>{p.price}</Text>
+                    <Text style={styles.planPeriod}>{p.period}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
 
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
-        <Button
-          title={`Kup plan ${plan.name.toLowerCase()} · ${plan.price}`}
-          onPress={handlePurchase}
-          loading={busy}
-          style={{ marginTop: space.md }}
-        />
+            <Button
+              title={`Kup plan ${plan.name.toLowerCase()} · ${plan.price}`}
+              onPress={handlePurchase}
+              loading={busy}
+              style={{ marginTop: space.md }}
+            />
 
-        <Text style={styles.note}>
-          Płatność obsługuje Stripe; dostępne metody zobaczysz na następnym ekranie.
-          {selectedPlan !== 'lifetime'
-            ? ' Subskrypcja odnawia się automatycznie. Anulujesz ją w każdej chwili w aplikacji: Więcej → CashFlo Pro.'
-            : ''}
-        </Text>
+            <Text style={styles.note}>
+              Płatność obsługuje Stripe; dostępne metody zobaczysz na następnym ekranie.
+              {selectedPlan !== 'lifetime'
+                ? ' Subskrypcja odnawia się automatycznie. Anulujesz ją w każdej chwili w aplikacji: Więcej → CashFlo Pro.'
+                : ''}
+            </Text>
 
-        <Card style={styles.guarantee}>
-          <Ionicons name="shield-checkmark-outline" size={22} color={colors.success} />
-          <Text style={styles.guaranteeText}>
-            Masz 14 dni na zwrot pieniędzy, jeśli nie zaczniesz korzystać z funkcji Pro. Napisz na cashflo2026@gmail.com. Szczegóły w Regulaminie.
-          </Text>
-        </Card>
+            <Card style={styles.guarantee}>
+              <Ionicons name="shield-checkmark-outline" size={22} color={colors.success} />
+              <Text style={styles.guaranteeText}>
+                Masz 14 dni na zwrot pieniędzy, jeśli nie zaczniesz korzystać z funkcji Pro. Napisz na cashflo2026@gmail.com. Szczegóły w Regulaminie.
+              </Text>
+            </Card>
 
-        <View style={styles.legalRow}>
-          <Text style={styles.legalText}>Kupując, akceptujesz </Text>
-          <TouchableOpacity onPress={() => router.push('/terms')}>
-            <Text style={styles.legalLink}>Regulamin</Text>
-          </TouchableOpacity>
-          <Text style={styles.legalText}> i </Text>
-          <TouchableOpacity onPress={() => router.push('/privacy')}>
-            <Text style={styles.legalLink}>Politykę prywatności</Text>
-          </TouchableOpacity>
-        </View>
+            <View style={styles.legalRow}>
+              <Text style={styles.legalText}>Kupując, akceptujesz </Text>
+              <TouchableOpacity onPress={() => router.push('/terms')}>
+                <Text style={styles.legalLink}>Regulamin</Text>
+              </TouchableOpacity>
+              <Text style={styles.legalText}> i </Text>
+              <TouchableOpacity onPress={() => router.push('/privacy')}>
+                <Text style={styles.legalLink}>Politykę prywatności</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </ScrollView>
     </View>
   );

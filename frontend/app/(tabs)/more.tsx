@@ -8,10 +8,10 @@ import { useTheme, ThemeColors } from '../../contexts/ThemeContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { LargeTitle, Card, ProBadge, space, radius } from '../../components/ui';
 import { confirmAction, showMessage } from '../../utils/confirm';
-import { openSubscriptionPortal, PLAN_NAMES, ProPlan } from '../../utils/payments';
+import { openSubscriptionPortal, PLAN_NAMES, ProPlan, STRIPE_PURCHASES_ENABLED } from '../../utils/payments';
 import { apiErrorMessage, isProLimitError } from '../../utils/format';
 import { downloadExcelExport } from '../../utils/export';
-import { promptPro } from '../../utils/pro';
+import { promptPro, betaProUntilLabel } from '../../utils/pro';
 
 type IconName = React.ComponentProps<typeof Ionicons>['name'];
 
@@ -108,8 +108,11 @@ export default function MoreScreen() {
 
   const initial = (user?.name || user?.email || '?').trim().charAt(0).toUpperCase();
   const plan = user?.pro_plan as ProPlan | null | undefined;
+  const betaUntil = betaProUntilLabel(user);
   const proSubtitle = user?.is_pro
-    ? plan === 'lifetime'
+    ? betaUntil
+      ? `Za darmo w testach do ${betaUntil}`
+      : plan === 'lifetime'
       ? 'Aktywne na zawsze'
       : plan
       ? `Aktywne · plan ${PLAN_NAMES[plan]}`
@@ -140,7 +143,7 @@ export default function MoreScreen() {
       {/* Pro */}
       <Card style={[styles.group, !user?.is_pro && { borderColor: colors.accent }]}>
         <Row icon="star" tint={colors.warning} title="CashFlo Pro" subtitle={proSubtitle} onPress={() => router.push('/pro/upgrade')} first />
-        {user?.can_manage_subscription ? (
+        {STRIPE_PURCHASES_ENABLED && user?.can_manage_subscription ? (
           <Row
             icon="card-outline"
             title="Zarządzaj subskrypcją"

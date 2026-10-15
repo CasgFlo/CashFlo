@@ -3,7 +3,7 @@ name: Screenshots
 # Renders the app (web build) with sample data and pushes phone-sized screenshots
 # to the ci-screenshots branch, for reviewing screens without a phone.
 # Also makes the Google Play graphics (store.mjs -> store/ on that branch).
-# Run it by pushing to the store-shots branch, e.g. git push -f origin main:store-shots
+# Run it by pushing a commit that changes .github/screenshots/run.txt to the store-shots branch.
 on:
   push:
     branches: [pro-features, store-shots]

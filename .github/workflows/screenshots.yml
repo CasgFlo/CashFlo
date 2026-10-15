@@ -2,9 +2,11 @@ name: Screenshots
 
 # Renders the app (web build) with sample data and pushes phone-sized screenshots
 # to the ci-screenshots branch, for reviewing screens without a phone.
+# Also makes the Google Play graphics (store.mjs -> store/ on that branch).
+# Run it by pushing to the store-shots branch, e.g. git push -f origin main:store-shots
 on:
   push:
-    branches: [pro-features]
+    branches: [pro-features, store-shots]
     paths: ["frontend/**", "backend/**", ".github/screenshots/**", ".github/workflows/screenshots.yml"]
 
 permissions:
@@ -47,6 +49,7 @@ jobs:
         working-directory: frontend
         env:
           EXPO_PUBLIC_BACKEND_URL: http://localhost:8000
+          EXPO_PUBLIC_STORE: play
         run: |
           yarn install --frozen-lockfile --non-interactive
           npx expo export --platform web --output-dir ../web-dist
@@ -59,6 +62,7 @@ jobs:
           npx playwright install --with-deps chromium > /dev/null
           for i in $(seq 1 30); do curl -sf localhost:3000 > /dev/null && break; sleep 1; done
           node shoot.mjs
+          node store.mjs
           cp ../../server.log shots/server.log || true
       - name: Publish to the ci-screenshots branch
         working-directory: .github/screenshots/shots

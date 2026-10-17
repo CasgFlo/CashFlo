@@ -12,8 +12,14 @@
 		Referrer-Policy strict-origin-when-cross-origin
 		Permissions-Policy "camera=(), microphone=(), geolocation=()"
 	}
-	@pages path / /ankieta /ankieta/ /prywatnosc /prywatnosc/ /usun-konto /usun-konto/ /legal.css
+	@pages path / /ankieta /ankieta/ /prywatnosc /prywatnosc/ /usun-konto /usun-konto/ /privacy /privacy/ /delete-account /delete-account/ /legal.css
 	header @pages Cache-Control "no-cache"
+
+	# English addresses (Google Play's declaration points at /privacy)
+	rewrite /privacy /prywatnosc/index.html
+	rewrite /privacy/ /prywatnosc/index.html
+	rewrite /delete-account /usun-konto/index.html
+	rewrite /delete-account/ /usun-konto/index.html
 
 	# /ankieta and /ankieta/ both open the survey (same for /prywatnosc and /usun-konto)
 	try_files {path} {path}/index.html
